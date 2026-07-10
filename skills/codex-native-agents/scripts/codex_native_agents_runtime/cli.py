@@ -8,6 +8,7 @@ from .workflow import (
     WorkflowError,
     load_workflow,
     new_workflow,
+    record_close,
     record_run,
     record_spawn,
     register_task,
@@ -71,6 +72,13 @@ def build_parser() -> argparse.ArgumentParser:
     spawn.add_argument("--inherit-parent", action="store_true")
     spawn.add_argument("--fallback-reason")
 
+    close = subparsers.add_parser("record-close")
+    _add_artifact_root(close)
+    close.add_argument("--workflow-id", required=True)
+    close.add_argument("--task-id", required=True)
+    close.add_argument("--agent-id", required=True)
+    close.add_argument("--status", required=True)
+
     verify = subparsers.add_parser("verify")
     _add_artifact_root(verify)
     verify.add_argument("--workflow-id", required=True)
@@ -125,6 +133,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         actual_model=args.actual_model,
                         inherit_parent=args.inherit_parent,
                         fallback_reason=args.fallback_reason,
+                    )
+                elif args.command == "record-close":
+                    record_close(
+                        workflow,
+                        task_id=args.task_id,
+                        agent_id=args.agent_id,
+                        status=args.status,
                     )
                 elif args.command == "verify":
                     verify_workflow(workflow)

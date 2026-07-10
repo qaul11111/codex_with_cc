@@ -18,6 +18,12 @@ from .scope import normalize_scopes, scopes_overlap
 from .task_contract import validate_task_file
 
 
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+
 IDENTIFIER = re.compile(r"[A-Za-z0-9._-]+")
 
 
@@ -183,6 +189,7 @@ def register_task(
         "latestRunId": None,
         "latestReportStatus": None,
         "latestReportFinalResult": None,
+        "latestClose": None,
     }
     if role == "implementer":
         task["reviews"] = {kind: None for kind in contract["reviewKinds"]}
@@ -307,6 +314,7 @@ def record_run(
     task["latestRunId"] = run_id
     task["latestReportStatus"] = parsed_report.status
     task["latestReportFinalResult"] = parsed_report.final_result
+    task["latestClose"] = None
 
     if task["role"] == "reviewer":
         reviewed_task["reviews"][task["reviewKind"]] = {
@@ -323,6 +331,52 @@ def record_run(
         run["acceptanceSnapshot"] = snapshot
         task["lastAcceptanceSnapshot"] = snapshot
     return run
+
+
+def record_close(
+    workflow: dict[str, Any],
+    *,
+    task_id: str,
+    agent_id: str,
+    status: str,
+) -> dict[str, Any]:
+    _workflow_id(workflow)
+    _ensure_mutable(workflow)
+    _workflow_revision(workflow)
+    task_id = _require_identifier(task_id, "Task")
+    if not agent_id.strip():
+        raise WorkflowError("Agent ID is required")
+    if status != "closed":
+        raise WorkflowError("Close status must be closed")
+
+    task = _workflow_tasks(workflow).get(task_id)
+    if task is None:
+        raise WorkflowError(f"Unknown task: {task_id}")
+    spawn = task.get("latestSpawn")
+    run_id = task.get("latestRunId")
+    if not isinstance(spawn, dict) or run_id is None:
+        raise WorkflowError("Record close requires current spawn and run evidence")
+    run = _workflow_runs(workflow).get(run_id)
+    if run is None:
+        raise WorkflowError("Record close requires the latest recorded run")
+    if task.get("lastRunId") != run_id or run.get("spawn") != spawn:
+        raise WorkflowError("Record close requires a run matching the latest spawn evidence")
+    if agent_id != spawn.get("agentId") or agent_id != run.get("agentId"):
+        raise WorkflowError("Record close agent ID must match the latest spawn and run")
+    if run.get("closure") is not None:
+        raise WorkflowError("Latest run already has close evidence")
+
+    closure = {
+        "agentId": agent_id,
+        "runId": run_id,
+        "reportStatus": run.get("reportStatus"),
+        "status": status,
+        "closedAt": _now(),
+        "closedRevision": _advance_revision(workflow),
+    }
+    run["closure"] = closure
+    task["latestClose"] = closure
+    return closure
 
 
 def _acceptance_snapshot(tasks: dict[str, dict[str, Any]]) -> list[dict[str, str | None]]:
@@ -342,11 +396,104 @@ def _acceptance_snapshot(tasks: dict[str, dict[str, Any]]) -> list[dict[str, str
     return snapshot
 
 
-def verify_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
+def _validate_workflow_structure(workflow: dict[str, Any]) -> None:
+    contract = load_contract()
     _workflow_id(workflow)
-    if workflow.get("status") == "accepted":
-        return workflow
+    if workflow.get("artifactSchema") != contract["artifactSchemaVersion"]:
+        raise WorkflowError("Workflow record has incompatible artifact schema")
+    if workflow.get("invocationContract") != contract["invocationContract"]:
+        raise WorkflowError("Workflow record has incompatible invocation contract")
+    if workflow.get("status") not in {"running", "accepted"}:
+        raise WorkflowError("Workflow record has invalid status")
     _workflow_revision(workflow)
+    tasks = _workflow_tasks(workflow)
+    runs = _workflow_runs(workflow)
+    for task_id, task in tasks.items():
+        if not isinstance(task, dict) or task.get("taskId") != task_id:
+            raise WorkflowError("Workflow record has inconsistent task identity")
+        if not isinstance(task.get("spawnAttempts"), list):
+            raise WorkflowError(f"Task has invalid spawn evidence: {task_id}")
+        if "latestClose" not in task:
+            raise WorkflowError(f"Task has invalid close evidence: {task_id}")
+    for run_id, run in runs.items():
+        if not isinstance(run, dict) or run.get("runId") != run_id:
+            raise WorkflowError("Workflow record has inconsistent run identity")
+        if run.get("taskId") not in tasks:
+            raise WorkflowError(f"Run references an unknown task: {run_id}")
+
+
+def _accepted_run_for_task(task: dict[str, Any], runs: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    task_id = task["taskId"]
+    if task.get("latestReportStatus") != "DONE":
+        raise WorkflowError(f"Registered task is not DONE: {task_id}")
+    run_id = task.get("latestRunId")
+    if run_id is None or task.get("lastRunId") != run_id:
+        raise WorkflowError(f"Registered task has no current recorded run: {task_id}")
+    run = runs.get(run_id)
+    if run is None or run.get("taskId") != task_id or run.get("reportStatus") != "DONE":
+        raise WorkflowError(f"Registered task has invalid DONE run evidence: {task_id}")
+    spawn = task.get("latestSpawn")
+    if not isinstance(spawn, dict) or run.get("spawn") != spawn or run.get("agentId") != spawn.get("agentId"):
+        raise WorkflowError(f"Registered task run must match latest spawn evidence: {task_id}")
+    closure = task.get("latestClose")
+    if not isinstance(closure, dict) or closure.get("status") != "closed":
+        raise WorkflowError(f"Registered task is not closed: {task_id}")
+    if (
+        closure.get("runId") != run_id
+        or closure.get("agentId") != run.get("agentId")
+        or closure.get("reportStatus") != run.get("reportStatus")
+        or run.get("closure") != closure
+    ):
+        raise WorkflowError(f"Registered task close evidence does not match the current run: {task_id}")
+    return run
+
+
+def _spawn_evidence_snapshot(tasks: dict[str, dict[str, Any]], runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "taskId": task_id,
+            "runId": task["latestRunId"],
+            "spawn": runs[task["latestRunId"]]["spawn"],
+        }
+        for task_id, task in sorted(tasks.items())
+    ]
+
+
+def _closure_snapshot(tasks: dict[str, dict[str, Any]], runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "taskId": task_id,
+            "runId": task["latestRunId"],
+            "agentId": runs[task["latestRunId"]]["agentId"],
+            "reportStatus": runs[task["latestRunId"]]["reportStatus"],
+            "closure": runs[task["latestRunId"]]["closure"],
+        }
+        for task_id, task in sorted(tasks.items())
+    ]
+
+
+def _validate_final_acceptance(
+    workflow: dict[str, Any],
+    *,
+    implementers: list[dict[str, Any]],
+    spawn_evidence: list[dict[str, Any]],
+    closure_snapshot: list[dict[str, Any]],
+) -> None:
+    acceptance = workflow.get("finalAcceptance")
+    if not isinstance(acceptance, dict) or acceptance.get("status") != "accepted":
+        raise WorkflowError("Accepted workflow is missing final acceptance evidence")
+    if acceptance.get("acceptedRevision") != workflow.get("revision"):
+        raise WorkflowError("Accepted workflow has invalid acceptance revision")
+    if acceptance.get("implementerTaskIds") != [task["taskId"] for task in implementers]:
+        raise WorkflowError("Accepted workflow has invalid implementer task evidence")
+    if acceptance.get("spawnEvidence") != spawn_evidence:
+        raise WorkflowError("Accepted workflow has invalid spawn evidence")
+    if acceptance.get("closureSnapshot") != closure_snapshot:
+        raise WorkflowError("Accepted workflow has invalid closure snapshot")
+
+
+def verify_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
+    _validate_workflow_structure(workflow)
     tasks = _workflow_tasks(workflow)
     runs = _workflow_runs(workflow)
     implementers = [task for task in tasks.values() if task["role"] == "implementer"]
@@ -387,6 +534,19 @@ def verify_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
                 if reviewer_run is None or final_run["recordedRevision"] <= reviewer_run["recordedRevision"]:
                     raise WorkflowError("final verifier must follow all accepted reviews")
 
+    for task in tasks.values():
+        _accepted_run_for_task(task, runs)
+    spawn_evidence = _spawn_evidence_snapshot(tasks, runs)
+    closure_snapshot = _closure_snapshot(tasks, runs)
+    if workflow["status"] == "accepted":
+        _validate_final_acceptance(
+            workflow,
+            implementers=implementers,
+            spawn_evidence=spawn_evidence,
+            closure_snapshot=closure_snapshot,
+        )
+        return workflow
+
     accepted_at = _now()
     acceptance_revision = _advance_revision(workflow)
     workflow["status"] = "accepted"
@@ -395,15 +555,8 @@ def verify_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
         "acceptedAt": accepted_at,
         "acceptedRevision": acceptance_revision,
         "implementerTaskIds": [task["taskId"] for task in implementers],
-        "spawnEvidence": [
-            {
-                "taskId": task["taskId"],
-                "runId": task["lastRunId"],
-                "spawn": runs[task["lastRunId"]]["spawn"],
-            }
-            for task in tasks.values()
-            if task["lastRunId"] is not None
-        ],
+        "spawnEvidence": spawn_evidence,
+        "closureSnapshot": closure_snapshot,
     }
     return workflow
 
@@ -424,29 +577,37 @@ def workflow_lock(
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(f".{path.name}.lock")
     deadline = time.monotonic() + timeout_seconds
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     acquired = False
     try:
         while True:
             try:
-                descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
+                if os.name == "nt":
+                    # msvcrt locks a byte range. Keep byte zero stable and retain this fd
+                    # for the whole context; closing it releases the lock after a crash.
+                    if os.fstat(descriptor).st_size == 0:
+                        os.write(descriptor, b"\0")
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                else:
+                    # flock is process-owned kernel state on POSIX, so SIGKILL releases it.
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (BlockingIOError, OSError):
                 if time.monotonic() >= deadline:
                     raise WorkflowError(f"Timed out acquiring workflow lock: {workflow_id}")
                 time.sleep(retry_seconds)
             else:
                 acquired = True
-                try:
-                    os.write(descriptor, str(os.getpid()).encode("ascii"))
-                finally:
-                    os.close(descriptor)
                 break
         yield
     finally:
-        if acquired:
+        if acquired and os.name == "nt":
             try:
-                lock_path.unlink()
-            except FileNotFoundError:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+            except OSError:
                 pass
+        os.close(descriptor)
 
 
 def write_workflow(artifact_root: Path, workflow: dict[str, Any]) -> Path:
@@ -486,6 +647,7 @@ __all__ = [
     "WorkflowError",
     "load_workflow",
     "new_workflow",
+    "record_close",
     "record_run",
     "record_spawn",
     "register_task",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -123,6 +124,37 @@ def record_spawn_for_task(workflow: dict, task_id: str, agent_id: str) -> None:
     )
 
 
+def close_task(workflow: dict, task_id: str) -> None:
+    task = workflow["tasks"][task_id]
+    workflow_runtime.record_close(
+        workflow,
+        task_id=task_id,
+        agent_id=task["latestSpawn"]["agentId"],
+        status="closed",
+    )
+
+
+def close_all_tasks(workflow: dict) -> None:
+    for task_id in workflow["tasks"]:
+        close_task(workflow, task_id)
+
+
+def close_cli_task(artifact_root: Path, workflow_id: str, task_id: str) -> subprocess.CompletedProcess[str]:
+    workflow = json.loads((artifact_root / f"workflow_{workflow_id}.json").read_text(encoding="utf-8"))
+    return run_cli(
+        artifact_root,
+        "record-close",
+        "--workflow-id",
+        workflow_id,
+        "--task-id",
+        task_id,
+        "--agent-id",
+        workflow["tasks"][task_id]["latestSpawn"]["agentId"],
+        "--status",
+        "closed",
+    )
+
+
 def add_accepted_reviews(workflow: dict, task_id: str = "impl") -> None:
     for kind in ("spec", "quality"):
         reviewer_task_id = f"{kind}-review"
@@ -189,6 +221,7 @@ def ready_for_acceptance_workflow() -> dict:
     )
     add_accepted_reviews(workflow)
     add_done_final_verifier(workflow)
+    close_all_tasks(workflow)
     return workflow
 
 
@@ -380,15 +413,8 @@ def test_cli_record_spawn_writes_actual_route_evidence(tmp_path: Path) -> None:
     assert workflow["tasks"]["research"]["latestSpawn"]["fallbackReason"]
 
 
-def test_verify_preserves_latest_spawn_evidence_in_final_acceptance() -> None:
+def test_verify_preserves_accepted_run_spawn_and_closure_snapshots() -> None:
     workflow = ready_for_acceptance_workflow()
-    workflow_runtime.record_spawn(
-        workflow,
-        task_id="impl",
-        agent_id="agent-impl",
-        inherit_parent=True,
-        fallback_reason="requested model unavailable in this host",
-    )
 
     verify_workflow(workflow)
 
@@ -396,6 +422,9 @@ def test_verify_preserves_latest_spawn_evidence_in_final_acceptance() -> None:
     assert {item["taskId"] for item in evidence} == {"impl", "spec-review", "quality-review", "final"}
     assert all(item["runId"] == workflow["tasks"][item["taskId"]]["lastRunId"] for item in evidence)
     assert all(item["spawn"] == workflow["runs"][item["runId"]]["spawn"] for item in evidence)
+    closures = workflow["finalAcceptance"]["closureSnapshot"]
+    assert {item["taskId"] for item in closures} == {"impl", "spec-review", "quality-review", "final"}
+    assert all(item["closure"] == workflow["runs"][item["runId"]]["closure"] for item in closures)
 
 
 def test_parallel_writable_overlap_is_rejected() -> None:
@@ -594,6 +623,7 @@ def test_cli_verifies_complete_implementer_workflow(tmp_path: Path) -> None:
     assert run_cli(artifact_root, "init", "--workflow-id", "wf-complete").returncode == 0
     assert register_cli_task(artifact_root, "wf-complete", "impl", "implementer", task_file).returncode == 0
     assert record_cli_run(artifact_root, "wf-complete", "impl", write_report(tmp_path, "impl-report", "implementer")).returncode == 0
+    assert close_cli_task(artifact_root, "wf-complete", "impl").returncode == 0
     for kind in ("spec", "quality"):
         reviewer_task_id = f"{kind}-review"
         assert register_cli_task(
@@ -613,8 +643,10 @@ def test_cli_verifies_complete_implementer_workflow(tmp_path: Path) -> None:
             reviewer_task_id,
             write_report(tmp_path, f"{reviewer_task_id}-report", "reviewer"),
         ).returncode == 0
+        assert close_cli_task(artifact_root, "wf-complete", reviewer_task_id).returncode == 0
     assert register_cli_task(artifact_root, "wf-complete", "final", "final-verifier", task_file).returncode == 0
     assert record_cli_run(artifact_root, "wf-complete", "final", write_report(tmp_path, "final-report", "final-verifier")).returncode == 0
+    assert close_cli_task(artifact_root, "wf-complete", "final").returncode == 0
 
     result = run_cli(artifact_root, "verify", "--workflow-id", "wf-complete")
 
@@ -710,3 +742,132 @@ def test_cli_rejects_invalid_or_naive_started_at(tmp_path: Path, started_at: str
 
     assert result.returncode != 0
     assert "timezone-aware" in result.stderr.lower()
+
+
+def test_acceptance_requires_done_run_and_matching_closed_agent_evidence() -> None:
+    workflow = new_workflow("wf-close-required")
+    register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
+    record_spawn_for_task(workflow, "research", "agent-research")
+    record_run(
+        workflow,
+        task_id="research",
+        agent_id="agent-research",
+        report=compliant_native_report("DONE", "researcher"),
+        run_id="research-run",
+    )
+
+    with pytest.raises(WorkflowError, match="closed"):
+        verify_workflow(workflow)
+
+    close_task(workflow, "research")
+    verify_workflow(workflow)
+    assert workflow["finalAcceptance"]["closureSnapshot"] == [
+        {
+            "agentId": "agent-research",
+            "closure": workflow["runs"]["research-run"]["closure"],
+            "reportStatus": "DONE",
+            "runId": "research-run",
+            "taskId": "research",
+        }
+    ]
+
+
+def test_record_close_binds_latest_run_spawn_agent_and_closed_status() -> None:
+    workflow = new_workflow("wf-close-binding")
+    register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
+    record_spawn_for_task(workflow, "research", "agent-research")
+    record_run(
+        workflow,
+        task_id="research",
+        agent_id="agent-research",
+        report=compliant_native_report("DONE", "researcher"),
+        run_id="research-run",
+    )
+
+    with pytest.raises(WorkflowError, match="agent ID"):
+        workflow_runtime.record_close(workflow, task_id="research", agent_id="another-agent", status="closed")
+    with pytest.raises(WorkflowError, match="status"):
+        workflow_runtime.record_close(workflow, task_id="research", agent_id="agent-research", status="failed")
+
+    closure = workflow_runtime.record_close(
+        workflow,
+        task_id="research",
+        agent_id="agent-research",
+        status="closed",
+    )
+    assert closure["runId"] == "research-run"
+    assert closure["agentId"] == "agent-research"
+    assert closure["reportStatus"] == "DONE"
+    assert workflow["runs"]["research-run"]["closure"] == closure
+
+
+def test_cli_record_close_requires_matching_agent_and_writes_closure_evidence(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    task_file = write_task(tmp_path, "close")
+    report_file = write_report(tmp_path, "close-report", "researcher")
+    assert run_cli(artifact_root, "init", "--workflow-id", "wf-cli-close").returncode == 0
+    assert register_cli_task(artifact_root, "wf-cli-close", "research", "researcher", task_file).returncode == 0
+    assert record_cli_run(artifact_root, "wf-cli-close", "research", report_file).returncode == 0
+
+    rejected = run_cli(
+        artifact_root,
+        "record-close",
+        "--workflow-id",
+        "wf-cli-close",
+        "--task-id",
+        "research",
+        "--agent-id",
+        "another-agent",
+        "--status",
+        "closed",
+    )
+    assert rejected.returncode != 0
+    assert "agent id" in rejected.stderr.lower()
+
+    accepted = close_cli_task(artifact_root, "wf-cli-close", "research")
+    assert accepted.returncode == 0, accepted.stderr
+    workflow = json.loads((artifact_root / "workflow_wf-cli-close.json").read_text(encoding="utf-8"))
+    assert workflow["tasks"]["research"]["latestClose"]["status"] == "closed"
+
+
+def test_accepted_workflow_revalidates_final_acceptance_integrity() -> None:
+    workflow = complete_workflow()
+    workflow["finalAcceptance"]["closureSnapshot"] = []
+
+    with pytest.raises(WorkflowError, match="closure snapshot"):
+        verify_workflow(workflow)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="SIGKILL is unavailable on Windows")
+def test_kernel_lock_releases_after_sigkill_without_removing_stable_lock_path(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    script = """
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from codex_native_agents_runtime.workflow import workflow_lock
+
+with workflow_lock(Path(sys.argv[2]), "wf-sigkill", timeout_seconds=1):
+    print("locked", flush=True)
+    time.sleep(60)
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", script, str(SCRIPTS), str(artifact_root)],
+        cwd=REPO,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={**os.environ, "PYTHONNOUSERSITE": "1"},
+    )
+    assert process.stdout is not None
+    assert process.stdout.readline().strip() == "locked"
+
+    process.send_signal(signal.SIGKILL)
+    assert process.wait(timeout=10) == -signal.SIGKILL
+
+    with workflow_runtime.workflow_lock(artifact_root, "wf-sigkill", timeout_seconds=1):
+        pass
+    lock_path = artifact_root / ".workflow_wf-sigkill.json.lock"
+    assert lock_path.exists()
