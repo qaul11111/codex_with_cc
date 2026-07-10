@@ -1,6 +1,6 @@
 {
   "name": "codex-native-agents",
-  "version": "0.1.0+codex.20260710090827",
+  "version": "0.1.0+codex.20260710145803",
   "description": "A Codex plugin for native child-agent workflows with structured task and workflow artifacts.",
   "author": {
     "name": "xdd666t"
