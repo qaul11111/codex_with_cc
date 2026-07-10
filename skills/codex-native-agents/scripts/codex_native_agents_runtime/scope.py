@@ -7,7 +7,7 @@ from typing import Iterable
 from .common import ContractError
 
 
-WINDOWS_DRIVE_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
+WINDOWS_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
 
 
 def normalize_scopes(values: Iterable[str]) -> tuple[str, ...]:
@@ -19,7 +19,7 @@ def normalize_scopes(values: Iterable[str]) -> tuple[str, ...]:
         path = PurePosixPath(scope)
         if (
             "\\" in scope
-            or WINDOWS_DRIVE_ABSOLUTE.match(scope)
+            or WINDOWS_DRIVE_PREFIX.match(scope)
             or path.is_absolute()
             or ".." in path.parts
         ):

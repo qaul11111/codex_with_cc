@@ -54,6 +54,12 @@ def test_normalize_scopes_rejects_parent_traversal(scope: str) -> None:
         normalize_scopes([scope])
 
 
+@pytest.mark.parametrize("scope", ["C:../secrets", "C:src"])
+def test_normalize_scopes_rejects_windows_drive_prefix(scope: str) -> None:
+    with pytest.raises(ContractError, match="project-relative"):
+        normalize_scopes([scope])
+
+
 def test_validate_task_file_accepts_contract_aliases(tmp_path: Path) -> None:
     task_file = tmp_path / "task.md"
     task_file.write_text(
