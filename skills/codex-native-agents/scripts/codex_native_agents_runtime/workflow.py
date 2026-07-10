@@ -75,6 +75,10 @@ def _advance_revision(workflow: dict[str, Any]) -> int:
     return revision
 
 
+def _same_spawn_attempt(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    return left.get("recordedRevision") == right.get("recordedRevision")
+
+
 def _ensure_mutable(workflow: dict[str, Any]) -> None:
     if workflow.get("status") == "accepted":
         raise WorkflowError("Accepted workflows are immutable; start a new WorkflowId")
@@ -227,6 +231,9 @@ def record_spawn(
     task = _workflow_tasks(workflow).get(task_id)
     if task is None:
         raise WorkflowError(f"Unknown task: {task_id}")
+    latest_spawn = task.get("latestSpawn")
+    if isinstance(latest_spawn, dict) and latest_spawn.get("closure") is None:
+        raise WorkflowError("Record spawn requires main to close the latest spawn attempt first")
     if inherit_parent and fallback_reason is None:
         raise WorkflowError("Inherited execution requires a fallback reason")
     if actual_model != task["requestedModel"] and fallback_reason is None:
@@ -240,11 +247,13 @@ def record_spawn(
         "actualModel": None if inherit_parent else actual_model,
         "executionMode": "inherit_parent" if inherit_parent else "model",
         "fallbackReason": fallback_reason,
+        "closure": None,
         "recordedAt": recorded_at,
         "recordedRevision": _advance_revision(workflow),
     }
     task["spawnAttempts"].append(spawn)
     task["latestSpawn"] = spawn
+    task["latestClose"] = None
     return spawn
 
 
@@ -270,7 +279,12 @@ def record_run(
     if spawn is None:
         raise WorkflowError("Record run requires spawn evidence")
     if spawn["agentId"] != agent_id:
+        matching_attempts = [attempt for attempt in task["spawnAttempts"] if attempt.get("agentId") == agent_id]
+        if matching_attempts and all(attempt.get("closure") is not None for attempt in matching_attempts):
+            raise WorkflowError("Record run cannot use a closed spawn attempt")
         raise WorkflowError("Record run agent ID must match latest spawn evidence")
+    if spawn.get("closure") is not None:
+        raise WorkflowError("Record run cannot use a closed spawn attempt")
     runs = _workflow_runs(workflow)
     run_id = _require_identifier(run_id or f"run-{len(runs) + 1}", "Run")
     if run_id in runs:
@@ -352,30 +366,47 @@ def record_close(
     task = _workflow_tasks(workflow).get(task_id)
     if task is None:
         raise WorkflowError(f"Unknown task: {task_id}")
-    spawn = task.get("latestSpawn")
-    run_id = task.get("latestRunId")
-    if not isinstance(spawn, dict) or run_id is None:
-        raise WorkflowError("Record close requires current spawn and run evidence")
-    run = _workflow_runs(workflow).get(run_id)
-    if run is None:
-        raise WorkflowError("Record close requires the latest recorded run")
-    if task.get("lastRunId") != run_id or run.get("spawn") != spawn:
-        raise WorkflowError("Record close requires a run matching the latest spawn evidence")
-    if agent_id != spawn.get("agentId") or agent_id != run.get("agentId"):
-        raise WorkflowError("Record close agent ID must match the latest spawn and run")
-    if run.get("closure") is not None:
-        raise WorkflowError("Latest run already has close evidence")
+    matching_attempts = [attempt for attempt in task["spawnAttempts"] if attempt.get("agentId") == agent_id]
+    open_attempts = [attempt for attempt in matching_attempts if attempt.get("closure") is None]
+    if not matching_attempts:
+        raise WorkflowError("Record close agent ID must match a spawn attempt")
+    if not open_attempts:
+        raise WorkflowError("Spawn attempt already has close evidence")
+    if len(open_attempts) != 1:
+        raise WorkflowError("Record close agent ID matches multiple open spawn attempts")
+    spawn = open_attempts[0]
+    matching_runs = [
+        run
+        for run in _workflow_runs(workflow).values()
+        if run.get("taskId") == task_id
+        and isinstance(run.get("spawn"), dict)
+        and _same_spawn_attempt(run["spawn"], spawn)
+    ]
+    if len(matching_runs) > 1:
+        raise WorkflowError("Spawn attempt has multiple recorded runs")
+    run = matching_runs[0] if matching_runs else None
+    if run is not None and run.get("agentId") != agent_id:
+        raise WorkflowError("Record close run agent ID must match its spawn attempt")
+    if run is not None and run.get("closure") is not None:
+        raise WorkflowError("Spawn attempt run already has close evidence")
 
     closure = {
         "agentId": agent_id,
-        "runId": run_id,
-        "reportStatus": run.get("reportStatus"),
+        "runId": run.get("runId") if run is not None else None,
+        "reportStatus": run.get("reportStatus") if run is not None else None,
         "status": status,
         "closedAt": _now(),
         "closedRevision": _advance_revision(workflow),
     }
-    run["closure"] = closure
-    task["latestClose"] = closure
+    spawn["closure"] = closure
+    latest_spawn = task.get("latestSpawn")
+    if isinstance(latest_spawn, dict) and _same_spawn_attempt(latest_spawn, spawn):
+        latest_spawn["closure"] = closure
+    if run is not None:
+        run["spawn"]["closure"] = closure
+        run["closure"] = closure
+    if isinstance(latest_spawn, dict) and _same_spawn_attempt(latest_spawn, spawn):
+        task["latestClose"] = closure
     return closure
 
 
@@ -413,6 +444,9 @@ def _validate_workflow_structure(workflow: dict[str, Any]) -> None:
             raise WorkflowError("Workflow record has inconsistent task identity")
         if not isinstance(task.get("spawnAttempts"), list):
             raise WorkflowError(f"Task has invalid spawn evidence: {task_id}")
+        for attempt in task["spawnAttempts"]:
+            if not isinstance(attempt, dict) or "closure" not in attempt:
+                raise WorkflowError(f"Task has invalid spawn attempt evidence: {task_id}")
         if "latestClose" not in task:
             raise WorkflowError(f"Task has invalid close evidence: {task_id}")
     for run_id, run in runs.items():
@@ -433,9 +467,14 @@ def _accepted_run_for_task(task: dict[str, Any], runs: dict[str, dict[str, Any]]
     if run is None or run.get("taskId") != task_id or run.get("reportStatus") != "DONE":
         raise WorkflowError(f"Registered task has invalid DONE run evidence: {task_id}")
     spawn = task.get("latestSpawn")
-    if not isinstance(spawn, dict) or run.get("spawn") != spawn or run.get("agentId") != spawn.get("agentId"):
+    if (
+        not isinstance(spawn, dict)
+        or not isinstance(run.get("spawn"), dict)
+        or not _same_spawn_attempt(run["spawn"], spawn)
+        or run.get("agentId") != spawn.get("agentId")
+    ):
         raise WorkflowError(f"Registered task run must match latest spawn evidence: {task_id}")
-    closure = task.get("latestClose")
+    closure = spawn.get("closure")
     if not isinstance(closure, dict) or closure.get("status") != "closed":
         raise WorkflowError(f"Registered task is not closed: {task_id}")
     if (
@@ -459,17 +498,51 @@ def _spawn_evidence_snapshot(tasks: dict[str, dict[str, Any]], runs: dict[str, d
     ]
 
 
-def _closure_snapshot(tasks: dict[str, dict[str, Any]], runs: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _closure_snapshot(tasks: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             "taskId": task_id,
-            "runId": task["latestRunId"],
-            "agentId": runs[task["latestRunId"]]["agentId"],
-            "reportStatus": runs[task["latestRunId"]]["reportStatus"],
-            "closure": runs[task["latestRunId"]]["closure"],
+            "agentId": attempt["agentId"],
+            "runId": attempt["closure"]["runId"],
+            "reportStatus": attempt["closure"]["reportStatus"],
+            "spawn": attempt,
+            "closure": attempt["closure"],
         }
         for task_id, task in sorted(tasks.items())
+        for attempt in task["spawnAttempts"]
     ]
+
+
+def _validate_spawn_attempt_closures(tasks: dict[str, dict[str, Any]], runs: dict[str, dict[str, Any]]) -> None:
+    for task_id, task in tasks.items():
+        for attempt in task["spawnAttempts"]:
+            closure = attempt.get("closure")
+            if not isinstance(closure, dict) or closure.get("status") != "closed":
+                raise WorkflowError(f"Spawn attempt is not closed: {task_id}")
+            if closure.get("agentId") != attempt.get("agentId"):
+                raise WorkflowError(f"Spawn attempt close agent ID does not match: {task_id}")
+            run_id = closure.get("runId")
+            report_status = closure.get("reportStatus")
+            attempt_runs = [
+                run
+                for run in runs.values()
+                if run.get("taskId") == task_id
+                and isinstance(run.get("spawn"), dict)
+                and _same_spawn_attempt(run["spawn"], attempt)
+            ]
+            if run_id is None:
+                if report_status is not None or attempt_runs:
+                    raise WorkflowError(f"Unrun spawn attempt has invalid close evidence: {task_id}")
+                continue
+            run = runs.get(run_id)
+            if (
+                run is None
+                or run not in attempt_runs
+                or run.get("agentId") != attempt.get("agentId")
+                or run.get("reportStatus") != report_status
+                or run.get("closure") != closure
+            ):
+                raise WorkflowError(f"Spawn attempt close evidence does not match its run: {task_id}")
 
 
 def _validate_final_acceptance(
@@ -537,7 +610,8 @@ def verify_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
     for task in tasks.values():
         _accepted_run_for_task(task, runs)
     spawn_evidence = _spawn_evidence_snapshot(tasks, runs)
-    closure_snapshot = _closure_snapshot(tasks, runs)
+    _validate_spawn_attempt_closures(tasks, runs)
+    closure_snapshot = _closure_snapshot(tasks)
     if workflow["status"] == "accepted":
         _validate_final_acceptance(
             workflow,

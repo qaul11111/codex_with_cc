@@ -188,6 +188,7 @@ def rerun_accepted_reviews(workflow: dict, suffix: str) -> None:
             report=compliant_native_report("DONE", "reviewer"),
             run_id=f"{reviewer_task_id}-{suffix}",
         )
+        close_task(workflow, reviewer_task_id)
 
 
 def add_done_final_verifier(workflow: dict) -> None:
@@ -252,6 +253,8 @@ def test_record_spawn_updates_actual_model_and_inheritance_fallback() -> None:
         actual_model="host-research-model",
         fallback_reason="requested model unavailable in this host",
     )
+    assert first["closure"] is None
+    workflow_runtime.record_close(workflow, task_id="research", agent_id="agent-research", status="closed")
     fallback = workflow_runtime.record_spawn(
         workflow,
         task_id="research",
@@ -262,10 +265,110 @@ def test_record_spawn_updates_actual_model_and_inheritance_fallback() -> None:
 
     task = workflow["tasks"]["research"]
     assert first["actualModel"] == "host-research-model"
+    assert first["closure"]["runId"] is None
     assert fallback["executionMode"] == "inherit_parent"
     assert fallback["fallbackReason"] == "requested model unavailable in this host"
     assert task["requestedModel"] == "gpt-5.6-luna"
     assert task["latestSpawn"] == fallback
+
+
+def test_unclosed_spawn_without_run_blocks_replacement_and_acceptance() -> None:
+    workflow = new_workflow("wf-unclosed-attempt")
+    task = register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
+    workflow_runtime.record_spawn(
+        workflow,
+        task_id="research",
+        agent_id="agent-old",
+        actual_model=task["requestedModel"],
+    )
+
+    with pytest.raises(WorkflowError, match="close the latest spawn"):
+        workflow_runtime.record_spawn(
+            workflow,
+            task_id="research",
+            agent_id="agent-new",
+            actual_model=task["requestedModel"],
+        )
+    with pytest.raises(WorkflowError, match="Registered task is not DONE: research"):
+        verify_workflow(workflow)
+
+
+def test_closed_unrun_attempt_allows_replacement_and_records_full_lifecycle_snapshot() -> None:
+    workflow = new_workflow("wf-replaced-attempt")
+    task = register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
+    workflow_runtime.record_spawn(
+        workflow,
+        task_id="research",
+        agent_id="agent-old",
+        actual_model=task["requestedModel"],
+    )
+    old_closure = workflow_runtime.record_close(
+        workflow,
+        task_id="research",
+        agent_id="agent-old",
+        status="closed",
+    )
+
+    workflow_runtime.record_spawn(
+        workflow,
+        task_id="research",
+        agent_id="agent-new",
+        actual_model=task["requestedModel"],
+    )
+    with pytest.raises(WorkflowError, match="closed spawn attempt"):
+        record_run(
+            workflow,
+            task_id="research",
+            agent_id="agent-old",
+            report=compliant_native_report("DONE", "researcher"),
+        )
+    record_run(
+        workflow,
+        task_id="research",
+        agent_id="agent-new",
+        report=compliant_native_report("DONE", "researcher"),
+        run_id="research-new-run",
+    )
+    workflow_runtime.record_close(workflow, task_id="research", agent_id="agent-new", status="closed")
+
+    verify_workflow(workflow)
+    closures = workflow["finalAcceptance"]["closureSnapshot"]
+    assert [(item["agentId"], item["runId"], item["reportStatus"]) for item in closures] == [
+        ("agent-old", None, None),
+        ("agent-new", "research-new-run", "DONE"),
+    ]
+    assert closures[0]["closure"] == old_closure
+
+
+def test_accepted_workflow_rejects_tampered_early_spawn_closure() -> None:
+    workflow = new_workflow("wf-tampered-early-closure")
+    task = register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
+    workflow_runtime.record_spawn(
+        workflow,
+        task_id="research",
+        agent_id="agent-old",
+        actual_model=task["requestedModel"],
+    )
+    workflow_runtime.record_close(workflow, task_id="research", agent_id="agent-old", status="closed")
+    workflow_runtime.record_spawn(
+        workflow,
+        task_id="research",
+        agent_id="agent-new",
+        actual_model=task["requestedModel"],
+    )
+    record_run(
+        workflow,
+        task_id="research",
+        agent_id="agent-new",
+        report=compliant_native_report("DONE", "researcher"),
+    )
+    workflow_runtime.record_close(workflow, task_id="research", agent_id="agent-new", status="closed")
+    verify_workflow(workflow)
+
+    workflow["tasks"]["research"]["spawnAttempts"][0]["closure"] = None
+
+    with pytest.raises(WorkflowError, match="Spawn attempt is not closed"):
+        verify_workflow(workflow)
 
 
 def test_record_spawn_requires_actual_model_or_inheritance() -> None:
@@ -462,6 +565,7 @@ def test_implementer_rerun_invalidates_stale_review_evidence() -> None:
         run_id="impl-v1",
     )
     add_accepted_reviews(workflow)
+    close_task(workflow, "impl")
     record_spawn_for_task(workflow, "impl", "agent-impl")
     record_run(
         workflow,
@@ -505,6 +609,7 @@ def test_reruns_invalidate_stale_final_verifier_snapshot(rerun_kind: str) -> Non
             report=compliant_native_report("DONE", "implementer"),
             run_id="impl-rerun",
         )
+        close_task(workflow, "impl")
         rerun_accepted_reviews(workflow, "after-impl")
     else:
         record_spawn_for_task(workflow, "spec-review", "agent-spec-review")
@@ -515,6 +620,7 @@ def test_reruns_invalidate_stale_final_verifier_snapshot(rerun_kind: str) -> Non
             report=compliant_native_report("DONE", "reviewer"),
             run_id="spec-review-rerun",
         )
+        close_task(workflow, "spec-review")
 
     with pytest.raises(WorkflowError, match="final verifier snapshot"):
         verify_workflow(workflow)
@@ -761,15 +867,10 @@ def test_acceptance_requires_done_run_and_matching_closed_agent_evidence() -> No
 
     close_task(workflow, "research")
     verify_workflow(workflow)
-    assert workflow["finalAcceptance"]["closureSnapshot"] == [
-        {
-            "agentId": "agent-research",
-            "closure": workflow["runs"]["research-run"]["closure"],
-            "reportStatus": "DONE",
-            "runId": "research-run",
-            "taskId": "research",
-        }
-    ]
+    closures = workflow["finalAcceptance"]["closureSnapshot"]
+    assert len(closures) == 1
+    assert closures[0]["closure"] == workflow["runs"]["research-run"]["closure"]
+    assert closures[0]["spawn"] == workflow["tasks"]["research"]["latestSpawn"]
 
 
 def test_acceptance_rejects_registered_researcher_without_spawn_or_run() -> None:
