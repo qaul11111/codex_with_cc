@@ -1,0 +1,4 @@
+interface:
+  display_name: "Native Agent Dispatching"
+  short_description: "Dispatch native agents with verified workflow gates"
+  default_prompt: "Use $codex-native-agents-dispatching to dispatch validated native agent tasks."

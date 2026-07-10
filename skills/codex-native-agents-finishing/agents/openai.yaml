@@ -1,0 +1,4 @@
+interface:
+  display_name: "Native Agent Finishing"
+  short_description: "Verify workflow closure and final acceptance gates"
+  default_prompt: "Use $codex-native-agents-finishing to close and verify this native workflow."

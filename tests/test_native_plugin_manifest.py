@@ -16,6 +16,6 @@ def test_native_plugin_manifest(repo: Path) -> None:
 
     assert manifest["name"] == "codex-native-agents"
     assert manifest["version"] == "0.1.0"
-    assert "Claude" not in json.dumps(manifest)
+    assert "legacy-delegation" not in json.dumps(manifest)
     assert "hooks" not in manifest
     assert (repo / "hooks/hooks.json").exists()

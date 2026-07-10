@@ -1,3 +1,0 @@
-interface:
-  display_name: "Task Dispatching"
-  short_description: "Dispatch planned tasks into Claude Code execution runs"

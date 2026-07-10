@@ -36,7 +36,6 @@ const FALLBACK_CONTRACT = {
 
 function pluginRoot() {
   return process.env.CODEX_PLUGIN_ROOT
-    || process.env.CLAUDE_PLUGIN_ROOT
     || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 }
 
@@ -225,119 +224,6 @@ function additionalContext(name) {
   };
 }
 
-function shellSegments(command) {
-  const source = String(command);
-  const segments = [];
-  let start = 0;
-  let quote = "";
-  let escaped = false;
-
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-      } else if (character === "\\" && quote === '"') {
-        escaped = true;
-      } else if (character === quote) {
-        quote = "";
-      }
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      continue;
-    }
-    const separatorLength = (character === "&" && source[index + 1] === "&")
-      || (character === "|" && source[index + 1] === "|")
-      ? 2
-      : character === ";" || character === "\n"
-        ? 1
-        : 0;
-    if (separatorLength) {
-      segments.push(source.slice(start, index).trim());
-      start = index + separatorLength;
-      index += separatorLength - 1;
-    }
-  }
-  segments.push(source.slice(start).trim());
-  return segments.filter(Boolean);
-}
-
-function unwrapCommandPosition(segment) {
-  let remaining = segment.trim();
-  while (remaining) {
-    const commandWrapper = remaining.match(/^command\s+/i);
-    if (commandWrapper) {
-      remaining = remaining.slice(commandWrapper[0].length).trimStart();
-      continue;
-    }
-    const envWrapper = remaining.match(/^env\s+(?:(?:[A-Za-z_]\w*)=(?:\S+)\s+)*/i);
-    if (envWrapper && envWrapper[0].trim() !== "env") {
-      remaining = remaining.slice(envWrapper[0].length).trimStart();
-      continue;
-    }
-    const assignment = remaining.match(/^(?:[A-Za-z_]\w*)=(?:\S+)\s+/);
-    if (assignment) {
-      remaining = remaining.slice(assignment[0].length).trimStart();
-      continue;
-    }
-    break;
-  }
-  return remaining;
-}
-
-function shellCommandBody(segment) {
-  const match = unwrapCommandPosition(segment).match(
-    /^(?:bash|sh|zsh)\s+-[A-Za-z]*c\s+([\s\S]+)$/i,
-  );
-  const argument = match?.[1].trim() || "";
-  if (!argument) {
-    return "";
-  }
-  if (argument[0] !== "'" && argument[0] !== '"') {
-    return argument.match(/^\S+/)?.[0] || "";
-  }
-
-  const quote = argument[0];
-  let escaped = false;
-  for (let index = 1; index < argument.length; index += 1) {
-    const character = argument[index];
-    if (escaped) {
-      escaped = false;
-    } else if (character === "\\" && quote === '"') {
-      escaped = true;
-    } else if (character === quote) {
-      return argument.slice(1, index);
-    }
-  }
-  return "";
-}
-
-function legacyExecutable(segment) {
-  const command = unwrapCommandPosition(segment);
-  const match = command.match(
-    /^(?:[\w./:-]*[\\/])?(claude(?:\.(?:cmd|exe))?|delegate_to_claude(?:\.[A-Za-z0-9]+)?)(?=\s|$)/i,
-  );
-  return match?.[1] || "";
-}
-
-function legacyShellProblem(command) {
-  for (const segment of shellSegments(command)) {
-    const executable = legacyExecutable(segment);
-    if (executable) {
-      return executable.toLowerCase().startsWith("claude")
-        ? "direct claude execution is forbidden"
-        : "delegate_to_claude execution is forbidden";
-    }
-    const nestedProblem = legacyShellProblem(shellCommandBody(segment));
-    if (nestedProblem) {
-      return nestedProblem;
-    }
-  }
-  return "";
-}
-
 function hasDelegationIntent(prompt) {
   const text = String(prompt);
   const englishAction = /\b(?:delegate|dispatch|start|spawn|launch)\b/i;
@@ -358,14 +244,6 @@ function nestedToolUses(input) {
 function handlePreToolUse(input) {
   const name = toolName(input);
   const payload = toolInput(input);
-
-  if (isShellTool(name)) {
-    const problem = legacyShellProblem(prop(payload, "command", "command") || "");
-    if (problem) {
-      writeJson(deny(`native agent gate blocked ${name}: ${problem}.`));
-    }
-    return;
-  }
 
   if (isSpawnTool(name)) {
     const problems = validateSpawn(payload);

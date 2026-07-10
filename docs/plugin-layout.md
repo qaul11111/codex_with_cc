@@ -1,23 +1,13 @@
-# Codex Plugin Layout
+# Plugin Layout
 
-This repository ships as a Codex plugin, with marketplace-first distribution through `aiskyhub/aiskyhub`.
+```text
+.codex-plugin/plugin.json
+hooks/hooks.json
+hooks/native-agent-gate-hook.mjs
+skills/codex-native-agents/                 # contract and local verifier
+skills/codex-native-agents-{planning,dispatching,worker,reviewing,finishing}/
+```
 
-## Structure
+The local development source is [qaul11111/codex_with_cc](https://github.com/qaul11111/codex_with_cc). It is installed at user scope through Codex's local plugin flow, not from a marketplace.
 
-- `.codex-plugin/plugin.json`: Codex plugin manifest and UI metadata.
-- `skills/`: Shared plugin content root for the Codex plugin.
-- `skills/codex-with-cc/`: The real workflow implementation, runtime scripts, `contract.json`, and contract docs.
-
-## Why the runtime stays under `skills/codex-with-cc/`
-
-The delegated runtime, hook gate, and contract tests assume that `skills/codex-with-cc/` is the canonical workflow root. Keeping that directory stable avoids breaking:
-
-- platform-specific packaging of `windows_scripts/` and `macos_scripts/`
-- verification scripts and path-sensitive tests
-- the shared `contract.json` read by both Python runtime code and the platform hook
-
-## Installation paths
-
-- Source layout: this repository exposes `.codex-plugin/plugin.json` so it can be recognized as a Codex plugin source.
-- Distribution path: install `codex-with-cc` from the `aiskyhub/aiskyhub` marketplace for Codex.
-- No script-based cross-project installer is provided by this repository anymore.
+The core contract owns roles, model profiles, task sections, report headings, and workflow gates. The five focused skills refer to that contract instead of duplicating it. Hooks only validate native dispatch protocol fields and do not launch agents.

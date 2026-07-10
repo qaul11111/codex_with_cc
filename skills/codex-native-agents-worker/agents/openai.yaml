@@ -1,0 +1,4 @@
+interface:
+  display_name: "Native Agent Worker"
+  short_description: "Execute bounded tasks and return verified reports"
+  default_prompt: "Use $codex-native-agents-worker to execute this scoped native agent task."

@@ -1,19 +1,23 @@
 # Verification
 
-Use these commands to validate the delegate runtime and workflow artifacts after changing codex-with-cc.
+Run these checks from the repository root after changing the plugin:
 
-```powershell
-python -m pytest -q
-pwsh -NoProfile -File .\skills\codex-with-cc\windows_scripts\test_delegate_runtime.ps1
-pwsh -NoProfile -File .\skills\codex-with-cc\windows_scripts\test_delegate_session_pool.ps1
-pwsh -NoProfile -File .\skills\codex-with-cc\windows_scripts\run_real_delegate_chain_validation.ps1 -ValidationRoot .\build\codex-with-cc-real-flow
+```bash
+jq empty .codex-plugin/plugin.json hooks/hooks.json skills/codex-native-agents/contract.json
+node --check hooks/native-agent-gate-hook.mjs
+PYTHONNOUSERSITE=1 python3 -m pytest -q
+git diff --check
 ```
 
-For completed worker runs, verify each `RunId` and the workflow aggregate:
+Validate each skill with the system validator:
 
-```powershell
-pwsh -NoProfile -File .\skills\codex-with-cc\windows_scripts\verify_delegate_artifacts.ps1 -RunId <RunId> -ArtifactRoot <ArtifactRoot>
-pwsh -NoProfile -File .\skills\codex-with-cc\windows_scripts\verify_delegate_workflow.ps1 -WorkflowId <WorkflowId> -ArtifactRoot <ArtifactRoot>
+```bash
+python3 /Users/wxl/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/codex-native-agents
+python3 /Users/wxl/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/codex-native-agents-planning
+python3 /Users/wxl/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/codex-native-agents-dispatching
+python3 /Users/wxl/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/codex-native-agents-worker
+python3 /Users/wxl/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/codex-native-agents-reviewing
+python3 /Users/wxl/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/codex-native-agents-finishing
 ```
 
-On macOS, use the matching scripts under `skills/codex-with-cc/macos_scripts/`.
+Then validate the plugin package with `validate_plugin.py`. For an implementation workflow, `native_agents.py verify --workflow-id <id>` must show accepted spec review, quality review, and final verification evidence.

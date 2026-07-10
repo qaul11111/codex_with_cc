@@ -1,5 +1,0 @@
-- Produce a workflow/task/run plan, not an implementation.
-- Split work into task-file-sized assignments with Goal, Allowed Scope, Forbidden Actions, Acceptance Criteria, Verification, and Report Requirements.
-- Mark dependencies, serial work, parallel read-only work, and parallel writable work with non-overlapping scope.
-- Assign review gates for every implementer task: spec compliance first, quality review second.
-- Return `NEEDS_CONTEXT` when product intent, scope, or acceptance evidence is not stable enough to dispatch.

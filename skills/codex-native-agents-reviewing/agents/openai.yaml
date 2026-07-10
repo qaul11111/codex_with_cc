@@ -1,0 +1,4 @@
+interface:
+  display_name: "Native Agent Reviewing"
+  short_description: "Review native agent output and acceptance evidence"
+  default_prompt: "Use $codex-native-agents-reviewing to review this native agent result."

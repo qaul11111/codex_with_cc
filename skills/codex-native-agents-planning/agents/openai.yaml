@@ -1,0 +1,4 @@
+interface:
+  display_name: "Native Agent Planning"
+  short_description: "Plan bounded native agent workflows safely"
+  default_prompt: "Use $codex-native-agents-planning to create a scoped native agent workflow."
