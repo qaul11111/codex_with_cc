@@ -226,7 +226,42 @@ function additionalContext(name) {
 }
 
 function shellSegments(command) {
-  return String(command).split(/(?:&&|\|\||;|\n)/).map((segment) => segment.trim());
+  const source = String(command);
+  const segments = [];
+  let start = 0;
+  let quote = "";
+  let escaped = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\" && quote === '"') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    const separatorLength = (character === "&" && source[index + 1] === "&")
+      || (character === "|" && source[index + 1] === "|")
+      ? 2
+      : character === ";" || character === "\n"
+        ? 1
+        : 0;
+    if (separatorLength) {
+      segments.push(source.slice(start, index).trim());
+      start = index + separatorLength;
+      index += separatorLength - 1;
+    }
+  }
+  segments.push(source.slice(start).trim());
+  return segments.filter(Boolean);
 }
 
 function unwrapCommandPosition(segment) {
@@ -269,11 +304,15 @@ function legacyExecutable(segment) {
 
 function legacyShellProblem(command) {
   for (const segment of shellSegments(command)) {
-    const executable = legacyExecutable(segment) || legacyExecutable(shellCommandBody(segment));
+    const executable = legacyExecutable(segment);
     if (executable) {
       return executable.toLowerCase().startsWith("claude")
         ? "direct claude execution is forbidden"
         : "delegate_to_claude execution is forbidden";
+    }
+    const nestedProblem = legacyShellProblem(shellCommandBody(segment));
+    if (nestedProblem) {
+      return nestedProblem;
     }
   }
   return "";
@@ -283,8 +322,9 @@ function hasDelegationIntent(prompt) {
   const text = String(prompt);
   const englishAction = /\b(?:delegate|dispatch|start|spawn|launch)\b/i;
   const englishWorker = /\b(?:subagents?|child\s+agents?|workers?)\b/i;
+  const useWorker = /(?:^|[.!?]\s*)(?:please\s+)?use\s+(?:a|an|one|two|three|\d+)?\s*(?:child\s+agent|subagent|worker)\b/i;
   const chineseIntent = /(?:开启|启动|安排|委派|派遣|分配).{0,20}(?:子代理|子线程|工作者|workers?)/;
-  return (englishAction.test(text) && englishWorker.test(text)) || chineseIntent.test(text);
+  return (englishAction.test(text) && englishWorker.test(text)) || useWorker.test(text) || chineseIntent.test(text);
 }
 
 function nestedToolUses(input) {

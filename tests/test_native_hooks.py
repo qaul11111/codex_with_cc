@@ -78,6 +78,8 @@ def test_hooks_config_has_only_hooks_and_native_entrypoint() -> None:
     config = json.loads((REPO / "hooks" / "hooks.json").read_text(encoding="utf-8"))
 
     assert set(config) == {"hooks"}
+    assert set(config["hooks"]) == {"SessionStart", "UserPromptSubmit", "PreToolUse"}
+    assert all(config["hooks"][event_name] for event_name in config["hooks"])
     for event_hooks in config["hooks"].values():
         for matcher in event_hooks:
             for hook in matcher["hooks"]:
@@ -230,6 +232,14 @@ def test_read_only_legacy_inspection_is_allowed(run_hook, command: str) -> None:
         ("Bash", 'command claude -p "work"', "direct claude execution"),
         ("Bash", 'env FOO=bar claude -p "work"', "direct claude execution"),
         ("Bash", "./scripts/delegate_to_claude.sh", "delegate_to_claude execution"),
+        ("Bash", "bash -c 'claude -p \"work\" && echo done'", "direct claude execution"),
+        (
+            "Bash",
+            "zsh -c 'echo ready; delegate_to_claude.sh -TaskFile task.md'",
+            "delegate_to_claude execution",
+        ),
+        ("Bash", "bash -c 'echo ready || claude -p \"work\"'", "direct claude execution"),
+        ("Bash", "zsh -c 'echo ready\nclaude -p \"work\"'", "direct claude execution"),
     ],
 )
 def test_executable_legacy_commands_are_denied(
@@ -244,6 +254,25 @@ def test_executable_legacy_commands_are_denied(
     )
 
     assert expected in denied(output)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "bash -c 'printf \"claude -p work\"; echo done'",
+        "zsh -c 'printf \"delegate_to_claude.sh\" && echo done'",
+    ],
+)
+def test_safe_composite_shell_commands_are_allowed(run_hook, command: str) -> None:
+    output = run_hook(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+    )
+
+    assert output == {}
 
 
 @pytest.mark.parametrize(
@@ -272,6 +301,7 @@ def test_session_start_injects_compact_worker_guidance(run_hook) -> None:
     [
         "Delegate this bounded task to a child agent.",
         "Start two subagents",
+        "Use a child agent to review this change.",
         "请开启两个子代理",
         "Explain the plan, then delegate it to two workers",
     ],
