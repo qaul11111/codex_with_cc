@@ -77,11 +77,14 @@ def denied(output: dict[str, object]) -> str:
 
 
 def write_transcript(
-    path: Path, session_payload: dict[str, object], *subsequent_events: dict[str, object]
+    path: Path,
+    session_payload: dict[str, object],
+    *subsequent_events: dict[str, object],
+    trailing_newline: bool = True,
 ) -> Path:
     events = [{"type": "session_meta", "payload": session_payload}, *subsequent_events]
     path.write_text(
-        "\n".join(json.dumps(event) for event in events) + "\n",
+        "\n".join(json.dumps(event) for event in events) + ("\n" if trailing_newline else ""),
         encoding="utf-8",
     )
     return path
@@ -248,6 +251,40 @@ def test_subagent_session_meta_transcript_denies_spawn_despite_main_envelope(
     assert "child-session provenance" in denied(run_hook(compliant_spawn))
 
 
+def test_large_main_session_meta_without_final_newline_allows_compliant_spawn(
+    run_hook, compliant_spawn, tmp_path: Path
+) -> None:
+    transcript = write_transcript(
+        tmp_path / "large-main.jsonl",
+        {
+            "thread_source": "main",
+            "base_instructions": {"text": "main instructions " * 3_000},
+        },
+        trailing_newline=False,
+    )
+    compliant_spawn["transcript_path"] = str(transcript)
+
+    assert run_hook(compliant_spawn) == {}
+
+
+def test_large_subagent_session_meta_without_final_newline_denies_spawn(
+    run_hook, compliant_spawn, tmp_path: Path
+) -> None:
+    transcript = write_transcript(
+        tmp_path / "large-subagent.jsonl",
+        {
+            "source": {"subagent": {"thread_spawn": {"depth": 1}}},
+            "thread_source": "subagent",
+            "parent_thread_id": "parent-thread-id",
+            "base_instructions": {"text": "subagent instructions " * 3_000},
+        },
+        trailing_newline=False,
+    )
+    compliant_spawn["transcript_path"] = str(transcript)
+
+    assert "child-session provenance" in denied(run_hook(compliant_spawn))
+
+
 @pytest.mark.parametrize(
     "provenance",
     [
@@ -306,6 +343,23 @@ def test_legacy_agent_execution_is_denied_when_exec_command_uses_cmd(run_hook) -
             "hook_event_name": "PreToolUse",
             "tool_name": "functions.exec_command",
             "tool_input": {"cmd": f'{BLOCKED_AGENT_EXECUTABLE} -p "work"'},
+        }
+    )
+
+    assert "non-native agent executable" in denied(output)
+
+
+def test_legacy_agent_execution_is_denied_when_empty_command_and_malicious_cmd_coexist(
+    run_hook,
+) -> None:
+    output = run_hook(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "functions.exec_command",
+            "tool_input": {
+                "command": "",
+                "cmd": f'{BLOCKED_AGENT_EXECUTABLE} -p "work"',
+            },
         }
     )
 

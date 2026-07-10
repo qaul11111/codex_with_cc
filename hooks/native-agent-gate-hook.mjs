@@ -166,7 +166,7 @@ function readSessionMetaFromTranscript(input) {
       if (read === 0) {
         break;
       }
-      const newline = buffer.indexOf(0x0a, 0);
+      const newline = buffer.indexOf(0x0a, 0, read);
       chunks.push(Buffer.from(buffer.subarray(0, newline === -1 ? read : newline)));
       bytesRead += newline === -1 ? read : newline;
       if (newline !== -1) {
@@ -175,6 +175,12 @@ function readSessionMetaFromTranscript(input) {
           ? event.payload
           : null;
       }
+    }
+    if (bytesRead > 0) {
+      const event = JSON.parse(Buffer.concat(chunks, bytesRead).toString("utf8"));
+      return event?.type === "session_meta" && event.payload && typeof event.payload === "object"
+        ? event.payload
+        : null;
     }
   } catch {
     // Host transcript metadata is supplemental; isolation is the fallback boundary.
@@ -205,6 +211,16 @@ function childProvenanceSignal(value) {
 
 function childSessionProvenance(input) {
   return childProvenanceSignal(input) || childProvenanceSignal(readSessionMetaFromTranscript(input));
+}
+
+function shellCommandInput(input) {
+  for (const field of ["command", "cmd"]) {
+    const value = input?.[field];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return "";
 }
 
 function textItems(input) {
@@ -439,7 +455,7 @@ function handlePreToolUse(input) {
   const payload = toolInput(input);
 
   if (isShellTool(name)) {
-    const problem = blockedShellProblem(prop(payload, "command", "cmd") || "");
+    const problem = blockedShellProblem(shellCommandInput(payload));
     if (problem) {
       writeJson(deny(`native agent gate blocked ${name}: ${problem}.`));
     }
