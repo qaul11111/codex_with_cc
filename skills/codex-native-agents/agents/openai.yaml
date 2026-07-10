@@ -1,0 +1,7 @@
+interface:
+  display_name: "Codex Native Agents"
+  short_description: "Dispatch bounded work through native Codex child agents"
+  default_prompt: "Use $codex-native-agents to plan, dispatch, review, and verify a native Codex child-agent workflow."
+
+policy:
+  allow_implicit_invocation: true

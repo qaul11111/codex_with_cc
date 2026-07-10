@@ -1,25 +1,24 @@
 {
-  "name": "codex-with-cc",
-  "version": "1.0.9",
-  "description": "A Codex plugin for delegating Codex child-agent work to Claude Code CLI with workflow artifacts.",
+  "name": "codex-native-agents",
+  "version": "0.1.0",
+  "description": "A Codex plugin for native child-agent workflows with structured task and workflow artifacts.",
   "author": {
     "name": "xdd666t"
   },
   "repository": "https://github.com/xdd666t/codex_with_cc",
   "keywords": [
     "codex",
-    "claude-code",
+    "native-agents",
     "plugin",
     "delegation",
     "workflow",
     "subagent"
   ],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
   "interface": {
-    "displayName": "Codex With CC",
-    "shortDescription": "Codex plugin for the Claude Code delegation workflow.",
-    "longDescription": "Routes Codex main thread planning into staged Codex child-agent execution that is handed off to Claude Code CLI with workflow/task/run artifacts, and is distributed marketplace-first through aiskyhub/aiskyhub for Codex installations.",
+    "displayName": "Codex Native Agents",
+    "shortDescription": "Native Codex child-agent workflow with structured artifacts.",
+    "longDescription": "Routes Codex main-thread planning into staged native child-agent execution with workflow, task, and run artifacts.",
     "developerName": "xdd666t",
     "category": "Development",
     "capabilities": [
@@ -27,9 +26,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Use the codex-with-cc workflow to delegate child-agent implementation through Claude Code CLI.",
-      "Review this repository and explain how Codex main thread planning flows into workflow/task/run Claude Code CLI execution.",
-      "Ensure the aiskyhub/aiskyhub marketplace is available, then install codex-with-cc@aiskyhub for user scope."
+      "Use the codex-native-agents workflow to delegate a bounded task to native Codex child agents.",
+      "Review this repository and explain how Codex main-thread planning flows into native workflow/task/run execution."
     ]
   }
 }

@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "invocationContract": "codex_native_agents_workflow",
+  "artifactSchemaVersion": 1,
+  "spawn": {
+    "forkContext": false,
+    "fallbackPolicy": "inherit_parent",
+    "maxEscalations": 1
+  },
+  "modelProfiles": {
+    "economy": {"model": "gpt-5.6-luna", "reasoningEffort": "medium"},
+    "balanced": {"model": "gpt-5.6-terra", "reasoningEffort": "medium"},
+    "balancedHigh": {"model": "gpt-5.6-terra", "reasoningEffort": "high"},
+    "frontier": {"model": "gpt-5.6-sol", "reasoningEffort": "high"}
+  },
+  "roleProfiles": {
+    "planner": "balancedHigh",
+    "implementer": "balanced",
+    "researcher": "economy",
+    "reviewer": "balancedHigh",
+    "final-verifier": "frontier"
+  },
+  "workerRoles": [
+    "planner",
+    "implementer",
+    "researcher",
+    "reviewer",
+    "final-verifier"
+  ],
+  "reportStatusValues": [
+    "DONE",
+    "DONE_WITH_CONCERNS",
+    "NEEDS_CONTEXT",
+    "BLOCKED",
+    "FAIL"
+  ],
+  "reportHeadings": [
+    "Status",
+    "Role",
+    "Summary",
+    "Changed Files",
+    "Verification",
+    "Findings",
+    "Final Result",
+    "Risks Or Follow-ups"
+  ],
+  "triggerPatterns": [
+    "child[- ]?agent",
+    "sub[- ]?agent",
+    "child[- ]?thread",
+    "sub[- ]?thread",
+    "delegat(?:e|ion|ing)",
+    "worker[- ]?execution",
+    "子代理|子线程|多代理|委派|派工|执行层"
+  ],
+  "reviewKinds": ["spec", "quality"],
+  "taskFile": {
+    "requiredSections": [
+      "Goal",
+      "Allowed Scope",
+      "Forbidden Actions",
+      "Acceptance Criteria",
+      "Verification",
+      "Report Requirements"
+    ],
+    "sectionAliases": {
+      "Goal": ["Goal", "Assignment", "Task"],
+      "Allowed Scope": ["Allowed Scope", "Scope", "Allowed Files"],
+      "Forbidden Actions": ["Forbidden Actions", "Out of Scope", "Forbidden Work"],
+      "Acceptance Criteria": ["Acceptance Criteria", "Acceptance", "Self Check"],
+      "Verification": ["Verification", "Tests", "Required Verification"],
+      "Report Requirements": ["Report Requirements", "Worker Report", "Output Contract"]
+    }
+  },
+  "taskEnvelope": {
+    "startMarker": "[NATIVE_CODEX_AGENT_TASK]",
+    "endMarker": "[/NATIVE_CODEX_AGENT_TASK]",
+    "requiredFields": [
+      "WorkflowId",
+      "TaskId",
+      "Role",
+      "TaskFile",
+      "Scope",
+      "ModelProfile",
+      "Writable",
+      "Parallel",
+      "DispatcherRole"
+    ]
+  }
+}
