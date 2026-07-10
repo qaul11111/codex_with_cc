@@ -175,6 +175,8 @@ def register_task(
         "requestedModel": route.model,
         "reasoningEffort": route.reasoning_effort,
         "fallback": route.fallback,
+        "spawnAttempts": [],
+        "latestSpawn": None,
         "reviewForTaskId": review_for_task_id,
         "reviewKind": review_kind,
         "lastRunId": None,
@@ -189,6 +191,50 @@ def register_task(
     _advance_revision(workflow)
     tasks[task_id] = task
     return task
+
+
+def record_spawn(
+    workflow: dict[str, Any],
+    *,
+    task_id: str,
+    agent_id: str,
+    actual_model: str | None = None,
+    inherit_parent: bool = False,
+    fallback_reason: str | None = None,
+) -> dict[str, Any]:
+    _workflow_id(workflow)
+    _ensure_mutable(workflow)
+    _workflow_revision(workflow)
+    task_id = _require_identifier(task_id, "Task")
+    if not agent_id.strip():
+        raise WorkflowError("Agent ID is required")
+    if actual_model is None and not inherit_parent:
+        raise WorkflowError("Spawn evidence requires an actual model or inherit_parent")
+    if actual_model is not None and not actual_model.strip():
+        raise WorkflowError("Actual model must not be empty")
+    if inherit_parent and actual_model is not None:
+        raise WorkflowError("Inherited execution cannot also declare an actual model")
+    if fallback_reason is not None and not fallback_reason.strip():
+        raise WorkflowError("Fallback reason must not be empty")
+
+    task = _workflow_tasks(workflow).get(task_id)
+    if task is None:
+        raise WorkflowError(f"Unknown task: {task_id}")
+    recorded_at = _now()
+    spawn = {
+        "agentId": agent_id,
+        "requestedProfile": task["modelProfile"],
+        "requestedModel": task["requestedModel"],
+        "requestedReasoningEffort": task["reasoningEffort"],
+        "actualModel": None if inherit_parent else actual_model,
+        "executionMode": "inherit_parent" if inherit_parent else "model",
+        "fallbackReason": fallback_reason,
+        "recordedAt": recorded_at,
+        "recordedRevision": _advance_revision(workflow),
+    }
+    task["spawnAttempts"].append(spawn)
+    task["latestSpawn"] = spawn
+    return spawn
 
 
 def record_run(
@@ -236,6 +282,7 @@ def record_run(
         "requestedModel": task["requestedModel"],
         "reasoningEffort": task["reasoningEffort"],
         "fallback": task["fallback"],
+        "spawn": task["latestSpawn"],
         "reportStatus": parsed_report.status,
         "reportFinalResult": parsed_report.final_result,
         "reportPath": report_path,
@@ -339,6 +386,11 @@ def verify_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
         "acceptedAt": accepted_at,
         "acceptedRevision": acceptance_revision,
         "implementerTaskIds": [task["taskId"] for task in implementers],
+        "spawnEvidence": [
+            {"taskId": task["taskId"], "latestSpawn": task["latestSpawn"]}
+            for task in tasks.values()
+            if task["latestSpawn"] is not None
+        ],
     }
     return workflow
 
@@ -422,6 +474,7 @@ __all__ = [
     "load_workflow",
     "new_workflow",
     "record_run",
+    "record_spawn",
     "register_task",
     "verify_workflow",
     "workflow_lock",

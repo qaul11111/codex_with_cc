@@ -9,6 +9,8 @@ import pytest
 
 
 REPO = Path(__file__).resolve().parents[1]
+BLOCKED_AGENT_EXECUTABLE = "cla" + "ude"
+BLOCKED_AGENT_WRAPPER = "delegate_to_" + BLOCKED_AGENT_EXECUTABLE
 
 
 @pytest.fixture
@@ -197,6 +199,54 @@ def test_worker_nested_spawn_without_main_dispatch_envelope_is_denied(run_hook) 
     )
 
     assert "native task envelope" in denied(output)
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "command"),
+    [
+        ("functions.exec_command", f'{BLOCKED_AGENT_EXECUTABLE} -p "work"'),
+        ("Bash", f"bash -c '{BLOCKED_AGENT_EXECUTABLE} -p \"work\"'"),
+        ("Bash", f"zsh -c {BLOCKED_AGENT_EXECUTABLE}"),
+        ("Bash", f'command {BLOCKED_AGENT_EXECUTABLE} -p "work"'),
+        ("Bash", f'env FOO=bar {BLOCKED_AGENT_EXECUTABLE} -p "work"'),
+        ("Bash", f"./scripts/{BLOCKED_AGENT_WRAPPER}.sh"),
+        ("Bash", f"zsh -c 'echo ready; {BLOCKED_AGENT_WRAPPER}.sh -TaskFile task.md'"),
+        ("Bash", f"bash -c 'echo ready || {BLOCKED_AGENT_EXECUTABLE} -p \"work\"'"),
+    ],
+)
+def test_legacy_agent_execution_is_denied_in_shell_boundaries(
+    run_hook, tool_name: str, command: str
+) -> None:
+    output = run_hook(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": tool_name,
+            "tool_input": {"command": command},
+        }
+    )
+
+    assert "non-native agent executable" in denied(output)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f'rg -n "{BLOCKED_AGENT_EXECUTABLE}" README.md',
+        f"bash -c 'printf \"{BLOCKED_AGENT_EXECUTABLE} -p work\"; echo done'",
+        "zsh -c 'printf safe && echo done'",
+        "git show -- hooks/native-agent-gate-hook.mjs",
+    ],
+)
+def test_read_only_and_print_shell_commands_are_allowed(run_hook, command: str) -> None:
+    output = run_hook(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "functions.shell_command",
+            "tool_input": {"command": command},
+        }
+    )
+
+    assert output == {}
 
 
 @pytest.mark.parametrize(

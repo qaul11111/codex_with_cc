@@ -12,3 +12,4 @@ Read the TaskFile and core contract before acting. Execute only the assigned tas
 - Reviewers perform exactly their assigned `spec` or `quality` review and inspect evidence rather than trusting a report.
 - Return all required headings: `Status`, `Role`, `Summary`, `Changed Files`, `Verification`, `Findings`, `Final Result`, and `Risks Or Follow-ups`.
 - Use a valid status and make `Final Result` match it exactly.
+- Return the report file to the main thread, which records it with `native_agents.py record-run`; workers never update workflow records or dispatch agents.

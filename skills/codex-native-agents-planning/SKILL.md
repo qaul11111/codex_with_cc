@@ -14,3 +14,4 @@ Read `../codex-native-agents/CODEX_NATIVE_AGENTS.md`. Use this for a request tha
 - Plan `spec`, `quality`, and `final-verifier` gates for each implementer.
 - Keep architecture, task boundaries, acceptance, and rework decisions with the main thread.
 - Return `NEEDS_CONTEXT` instead of dispatching an assignment with unresolved decisions.
+- Put the exact `validate-task`, `register-task`, and verification commands in each TaskFile; dispatching records the observed spawn route separately from the requested profile.

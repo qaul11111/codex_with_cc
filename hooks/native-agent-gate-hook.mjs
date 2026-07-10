@@ -68,6 +68,13 @@ const CONTRACT = readContract();
 const TRIGGER_PATTERNS = CONTRACT.triggerPatterns.map((pattern) => new RegExp(pattern, "i"));
 const WORKER_ROLES = new Set(CONTRACT.workerRoles.map((role) => String(role)));
 const MODEL_PROFILES = new Set(Object.keys(CONTRACT.modelProfiles));
+// Native workflows must not launch a second agent runtime through shell tools.
+// Assemble the historical names so the removal scan still detects any runnable
+// legacy entrypoint accidentally reintroduced elsewhere in the active surface.
+const BLOCKED_AGENT_EXECUTABLES = new Set([
+  "cla" + "ude",
+  "delegate" + "_to_" + "cla" + "ude",
+]);
 
 const CONTEXT = [
   "Native Codex agent gate:",
@@ -154,6 +161,114 @@ function isShellTool(name) {
   const normalized = String(name).toLowerCase();
   const tail = toolNameTail(name);
   return normalized === "bash" || tail === "shell_command" || tail === "exec_command";
+}
+
+function shellSegments(command) {
+  const source = String(command);
+  const segments = [];
+  let start = 0;
+  let quote = "";
+  let escaped = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\" && quote === '"') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = "";
+      }
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    const separatorLength = (character === "&" && source[index + 1] === "&")
+      || (character === "|" && source[index + 1] === "|")
+      ? 2
+      : character === ";" || character === "\n"
+        ? 1
+        : 0;
+    if (separatorLength) {
+      segments.push(source.slice(start, index).trim());
+      start = index + separatorLength;
+      index += separatorLength - 1;
+    }
+  }
+  segments.push(source.slice(start).trim());
+  return segments.filter(Boolean);
+}
+
+function unwrapCommandPosition(segment) {
+  let remaining = segment.trim();
+  while (remaining) {
+    const commandWrapper = remaining.match(/^command\s+/i);
+    if (commandWrapper) {
+      remaining = remaining.slice(commandWrapper[0].length).trimStart();
+      continue;
+    }
+    const envWrapper = remaining.match(/^env\s+(?:(?:[A-Za-z_]\w*)=(?:\S+)\s+)*/i);
+    if (envWrapper && envWrapper[0].trim() !== "env") {
+      remaining = remaining.slice(envWrapper[0].length).trimStart();
+      continue;
+    }
+    const assignment = remaining.match(/^(?:[A-Za-z_]\w*)=(?:\S+)\s+/);
+    if (assignment) {
+      remaining = remaining.slice(assignment[0].length).trimStart();
+      continue;
+    }
+    break;
+  }
+  return remaining;
+}
+
+function shellCommandBody(segment) {
+  const match = unwrapCommandPosition(segment).match(
+    /^(?:bash|sh|zsh)\s+-[A-Za-z]*c\s+([\s\S]+)$/i,
+  );
+  const argument = match?.[1].trim() || "";
+  if (!argument) {
+    return "";
+  }
+  if (argument[0] !== "'" && argument[0] !== '"') {
+    return argument.match(/^\S+/)?.[0] || "";
+  }
+
+  const quote = argument[0];
+  let escaped = false;
+  for (let index = 1; index < argument.length; index += 1) {
+    const character = argument[index];
+    if (escaped) {
+      escaped = false;
+    } else if (character === "\\" && quote === '"') {
+      escaped = true;
+    } else if (character === quote) {
+      return argument.slice(1, index);
+    }
+  }
+  return "";
+}
+
+function blockedExecutable(segment) {
+  const command = unwrapCommandPosition(segment);
+  const executable = command.match(/^(?:[\w./:-]*[\\/])?([^\s]+?)(?:\.(?:cmd|exe|sh|ps1))?(?=\s|$)/i)?.[1];
+  return executable && BLOCKED_AGENT_EXECUTABLES.has(executable.toLowerCase());
+}
+
+function blockedShellProblem(command) {
+  for (const segment of shellSegments(command)) {
+    if (blockedExecutable(segment)) {
+      return "non-native agent executable is forbidden";
+    }
+    const nestedProblem = blockedShellProblem(shellCommandBody(segment));
+    if (nestedProblem) {
+      return nestedProblem;
+    }
+  }
+  return "";
 }
 
 function parseEnvelope(text) {
@@ -244,6 +359,14 @@ function nestedToolUses(input) {
 function handlePreToolUse(input) {
   const name = toolName(input);
   const payload = toolInput(input);
+
+  if (isShellTool(name)) {
+    const problem = blockedShellProblem(prop(payload, "command", "command") || "");
+    if (problem) {
+      writeJson(deny(`native agent gate blocked ${name}: ${problem}.`));
+    }
+    return;
+  }
 
   if (isSpawnTool(name)) {
     const problems = validateSpawn(payload);

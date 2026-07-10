@@ -16,6 +16,7 @@ SCRIPTS = REPO / "skills" / "codex-native-agents" / "scripts"
 CLI = SCRIPTS / "native_agents.py"
 sys.path.insert(0, str(SCRIPTS))
 
+from codex_native_agents_runtime import workflow as workflow_runtime
 from codex_native_agents_runtime.workflow import (
     WorkflowError,
     new_workflow,
@@ -172,6 +173,82 @@ def test_implementer_requires_two_reviews_and_final_verifier() -> None:
 
     with pytest.raises(WorkflowError, match="spec review"):
         verify_workflow(workflow)
+
+
+def test_record_spawn_updates_actual_model_and_inheritance_fallback() -> None:
+    workflow = new_workflow("wf-spawn-evidence")
+    register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
+
+    first = workflow_runtime.record_spawn(
+        workflow,
+        task_id="research",
+        agent_id="agent-research",
+        actual_model="host-research-model",
+    )
+    fallback = workflow_runtime.record_spawn(
+        workflow,
+        task_id="research",
+        agent_id="agent-research-fallback",
+        inherit_parent=True,
+        fallback_reason="requested model unavailable in this host",
+    )
+
+    task = workflow["tasks"]["research"]
+    assert first["actualModel"] == "host-research-model"
+    assert fallback["executionMode"] == "inherit_parent"
+    assert fallback["fallbackReason"] == "requested model unavailable in this host"
+    assert task["requestedModel"] == "gpt-5.6-luna"
+    assert task["latestSpawn"] == fallback
+
+
+def test_record_spawn_requires_actual_model_or_inheritance() -> None:
+    workflow = new_workflow("wf-spawn-route")
+    register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
+
+    with pytest.raises(WorkflowError, match="actual model or inherit"):
+        workflow_runtime.record_spawn(workflow, task_id="research", agent_id="agent-research")
+
+
+def test_cli_record_spawn_writes_actual_route_evidence(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    task_file = write_task(tmp_path, "spawn-evidence")
+    assert run_cli(artifact_root, "init", "--workflow-id", "wf-cli-spawn").returncode == 0
+    assert register_cli_task(artifact_root, "wf-cli-spawn", "research", "researcher", task_file).returncode == 0
+
+    result = run_cli(
+        artifact_root,
+        "record-spawn",
+        "--workflow-id",
+        "wf-cli-spawn",
+        "--task-id",
+        "research",
+        "--agent-id",
+        "agent-research",
+        "--inherit-parent",
+        "--fallback-reason",
+        "requested model unavailable in this host",
+    )
+
+    assert result.returncode == 0, result.stderr
+    workflow = json.loads((artifact_root / "workflow_wf-cli-spawn.json").read_text(encoding="utf-8"))
+    assert workflow["tasks"]["research"]["latestSpawn"]["executionMode"] == "inherit_parent"
+    assert workflow["tasks"]["research"]["latestSpawn"]["fallbackReason"]
+
+
+def test_verify_preserves_latest_spawn_evidence_in_final_acceptance() -> None:
+    workflow = ready_for_acceptance_workflow()
+    workflow_runtime.record_spawn(
+        workflow,
+        task_id="impl",
+        agent_id="agent-impl",
+        inherit_parent=True,
+        fallback_reason="requested model unavailable in this host",
+    )
+
+    verify_workflow(workflow)
+
+    evidence = workflow["finalAcceptance"]["spawnEvidence"]
+    assert evidence == [{"taskId": "impl", "latestSpawn": workflow["tasks"]["impl"]["latestSpawn"]}]
 
 
 def test_parallel_writable_overlap_is_rejected() -> None:
