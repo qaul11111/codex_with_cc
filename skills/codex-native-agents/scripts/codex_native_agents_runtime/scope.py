@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import re
 from pathlib import PurePosixPath
 from typing import Iterable
 
 from .common import ContractError
+
+
+WINDOWS_DRIVE_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def normalize_scopes(values: Iterable[str]) -> tuple[str, ...]:
@@ -13,7 +17,12 @@ def normalize_scopes(values: Iterable[str]) -> tuple[str, ...]:
         if not scope:
             continue
         path = PurePosixPath(scope)
-        if path.is_absolute() or ".." in path.parts:
+        if (
+            "\\" in scope
+            or WINDOWS_DRIVE_ABSOLUTE.match(scope)
+            or path.is_absolute()
+            or ".." in path.parts
+        ):
             raise ContractError("Scopes must be non-empty project-relative paths")
         normalized.add(path.as_posix().strip("/"))
     if not normalized or "." in normalized:

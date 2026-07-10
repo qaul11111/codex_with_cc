@@ -39,7 +39,16 @@ def test_parallel_writable_scopes_must_not_overlap() -> None:
     assert not scopes_overlap(["src/auth"], ["src/billing"])
 
 
-@pytest.mark.parametrize("scope", ["../src", "src/../secrets"])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "../src",
+        "src/../secrets",
+        r"src\..\secrets",
+        r"..\secrets",
+        r"C:\secrets",
+    ],
+)
 def test_normalize_scopes_rejects_parent_traversal(scope: str) -> None:
     with pytest.raises(ContractError, match="project-relative"):
         normalize_scopes([scope])
