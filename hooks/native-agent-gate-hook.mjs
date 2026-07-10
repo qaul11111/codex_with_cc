@@ -289,9 +289,29 @@ function unwrapCommandPosition(segment) {
 
 function shellCommandBody(segment) {
   const match = unwrapCommandPosition(segment).match(
-    /^(?:bash|sh|zsh)\s+(?:-[A-Za-z]*c\s+)(["'])([\s\S]*?)\1\s*$/i,
+    /^(?:bash|sh|zsh)\s+-[A-Za-z]*c\s+([\s\S]+)$/i,
   );
-  return match?.[2] || "";
+  const argument = match?.[1].trim() || "";
+  if (!argument) {
+    return "";
+  }
+  if (argument[0] !== "'" && argument[0] !== '"') {
+    return argument.match(/^\S+/)?.[0] || "";
+  }
+
+  const quote = argument[0];
+  let escaped = false;
+  for (let index = 1; index < argument.length; index += 1) {
+    const character = argument[index];
+    if (escaped) {
+      escaped = false;
+    } else if (character === "\\" && quote === '"') {
+      escaped = true;
+    } else if (character === quote) {
+      return argument.slice(1, index);
+    }
+  }
+  return "";
 }
 
 function legacyExecutable(segment) {

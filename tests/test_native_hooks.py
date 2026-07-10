@@ -240,6 +240,8 @@ def test_read_only_legacy_inspection_is_allowed(run_hook, command: str) -> None:
         ),
         ("Bash", "bash -c 'echo ready || claude -p \"work\"'", "direct claude execution"),
         ("Bash", "zsh -c 'echo ready\nclaude -p \"work\"'", "direct claude execution"),
+        ("Bash", "bash -c claude", "direct claude execution"),
+        ("Bash", "zsh -c delegate_to_claude.sh", "delegate_to_claude execution"),
     ],
 )
 def test_executable_legacy_commands_are_denied(
@@ -261,6 +263,8 @@ def test_executable_legacy_commands_are_denied(
     [
         "bash -c 'printf \"claude -p work\"; echo done'",
         "zsh -c 'printf \"delegate_to_claude.sh\" && echo done'",
+        "bash -c printf",
+        "zsh -c echo",
     ],
 )
 def test_safe_composite_shell_commands_are_allowed(run_hook, command: str) -> None:
