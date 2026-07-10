@@ -772,6 +772,14 @@ def test_acceptance_requires_done_run_and_matching_closed_agent_evidence() -> No
     ]
 
 
+def test_acceptance_rejects_registered_researcher_without_spawn_or_run() -> None:
+    workflow = new_workflow("wf-unrun-researcher")
+    register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
+
+    with pytest.raises(WorkflowError, match="Registered task is not DONE: research"):
+        verify_workflow(workflow)
+
+
 def test_record_close_binds_latest_run_spawn_agent_and_closed_status() -> None:
     workflow = new_workflow("wf-close-binding")
     register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
@@ -835,6 +843,22 @@ def test_accepted_workflow_revalidates_final_acceptance_integrity() -> None:
     workflow["finalAcceptance"]["closureSnapshot"] = []
 
     with pytest.raises(WorkflowError, match="closure snapshot"):
+        verify_workflow(workflow)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        pytest.param(lambda workflow: workflow.__setitem__("artifactSchema", "tampered"), "artifact schema", id="artifact-schema"),
+        pytest.param(lambda workflow: workflow.__setitem__("tasks", []), "invalid tasks", id="tasks"),
+        pytest.param(lambda workflow: workflow.__setitem__("finalAcceptance", None), "final acceptance", id="final-acceptance"),
+    ],
+)
+def test_accepted_workflow_revalidates_top_level_integrity(mutate, error: str) -> None:
+    workflow = complete_workflow()
+    mutate(workflow)
+
+    with pytest.raises(WorkflowError, match=error):
         verify_workflow(workflow)
 
 
