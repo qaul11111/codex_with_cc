@@ -80,7 +80,25 @@ def record_cli_run(
     workflow_id: str,
     task_id: str,
     report_file: Path,
+    *,
+    record_spawn_evidence: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    if record_spawn_evidence:
+        workflow = json.loads((artifact_root / f"workflow_{workflow_id}.json").read_text(encoding="utf-8"))
+        task = workflow["tasks"][task_id]
+        spawned = run_cli(
+            artifact_root,
+            "record-spawn",
+            "--workflow-id",
+            workflow_id,
+            "--task-id",
+            task_id,
+            "--agent-id",
+            f"agent-{task_id}",
+            "--actual-model",
+            task["requestedModel"],
+        )
+        assert spawned.returncode == 0, spawned.stderr
     return run_cli(
         artifact_root,
         "record-run",
@@ -92,6 +110,16 @@ def record_cli_run(
         f"agent-{task_id}",
         "--report-file",
         str(report_file),
+    )
+
+
+def record_spawn_for_task(workflow: dict, task_id: str, agent_id: str) -> None:
+    task = workflow["tasks"][task_id]
+    workflow_runtime.record_spawn(
+        workflow,
+        task_id=task_id,
+        agent_id=agent_id,
+        actual_model=task["requestedModel"],
     )
 
 
@@ -107,6 +135,7 @@ def add_accepted_reviews(workflow: dict, task_id: str = "impl") -> None:
             review_for_task_id=task_id,
             review_kind=kind,
         )
+        record_spawn_for_task(workflow, reviewer_task_id, f"agent-{reviewer_task_id}")
         record_run(
             workflow,
             task_id=reviewer_task_id,
@@ -119,6 +148,7 @@ def add_accepted_reviews(workflow: dict, task_id: str = "impl") -> None:
 def rerun_accepted_reviews(workflow: dict, suffix: str) -> None:
     for kind in ("spec", "quality"):
         reviewer_task_id = f"{kind}-review"
+        record_spawn_for_task(workflow, reviewer_task_id, f"agent-{reviewer_task_id}")
         record_run(
             workflow,
             task_id=reviewer_task_id,
@@ -136,6 +166,7 @@ def add_done_final_verifier(workflow: dict) -> None:
         scopes=("verification",),
         writable=False,
     )
+    record_spawn_for_task(workflow, "final", "agent-final")
     record_run(
         workflow,
         task_id="final",
@@ -148,6 +179,7 @@ def add_done_final_verifier(workflow: dict) -> None:
 def ready_for_acceptance_workflow() -> dict:
     workflow = new_workflow("wf-accepted")
     register_task(workflow, task_id="impl", role="implementer", scopes=("src",), writable=True)
+    record_spawn_for_task(workflow, "impl", "agent-impl")
     record_run(
         workflow,
         task_id="impl",
@@ -169,6 +201,7 @@ def complete_workflow() -> dict:
 def test_implementer_requires_two_reviews_and_final_verifier() -> None:
     workflow = new_workflow("wf-gates")
     register_task(workflow, task_id="impl", role="implementer", scopes=("src",), writable=True)
+    record_spawn_for_task(workflow, "impl", "agent-impl")
     record_run(workflow, task_id="impl", agent_id="agent-impl", report=compliant_native_report("DONE", "implementer"))
 
     with pytest.raises(WorkflowError, match="spec review"):
@@ -184,6 +217,7 @@ def test_record_spawn_updates_actual_model_and_inheritance_fallback() -> None:
         task_id="research",
         agent_id="agent-research",
         actual_model="host-research-model",
+        fallback_reason="requested model unavailable in this host",
     )
     fallback = workflow_runtime.record_spawn(
         workflow,
@@ -207,6 +241,117 @@ def test_record_spawn_requires_actual_model_or_inheritance() -> None:
 
     with pytest.raises(WorkflowError, match="actual model or inherit"):
         workflow_runtime.record_spawn(workflow, task_id="research", agent_id="agent-research")
+
+
+@pytest.mark.parametrize(
+    ("actual_model", "inherit_parent", "fallback_reason"),
+    [
+        (None, True, None),
+        ("host-research-model", False, None),
+    ],
+)
+def test_record_spawn_requires_fallback_reason_for_route_changes(
+    actual_model: str | None, inherit_parent: bool, fallback_reason: str | None
+) -> None:
+    workflow = new_workflow("wf-spawn-fallback")
+    register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
+
+    with pytest.raises(WorkflowError, match="fallback reason"):
+        workflow_runtime.record_spawn(
+            workflow,
+            task_id="research",
+            agent_id="agent-research",
+            actual_model=actual_model,
+            inherit_parent=inherit_parent,
+            fallback_reason=fallback_reason,
+        )
+
+
+def test_record_run_requires_matching_spawn_evidence() -> None:
+    workflow = new_workflow("wf-run-evidence")
+    task = register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
+
+    with pytest.raises(WorkflowError, match="spawn evidence"):
+        record_run(
+            workflow,
+            task_id="research",
+            agent_id="agent-research",
+            report=compliant_native_report("DONE", "researcher"),
+        )
+
+    workflow_runtime.record_spawn(
+        workflow,
+        task_id="research",
+        agent_id="agent-research",
+        actual_model=task["requestedModel"],
+    )
+    with pytest.raises(WorkflowError, match="agent ID"):
+        record_run(
+            workflow,
+            task_id="research",
+            agent_id="another-agent",
+            report=compliant_native_report("DONE", "researcher"),
+        )
+
+    run = record_run(
+        workflow,
+        task_id="research",
+        agent_id="agent-research",
+        report=compliant_native_report("DONE", "researcher"),
+    )
+    assert run["spawn"] == workflow["tasks"]["research"]["latestSpawn"]
+
+
+def test_cli_record_run_requires_matching_spawn_evidence(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    task_file = write_task(tmp_path, "run-evidence")
+    report_file = write_report(tmp_path, "run-evidence-report", "researcher")
+    assert run_cli(artifact_root, "init", "--workflow-id", "wf-cli-run-evidence").returncode == 0
+    assert register_cli_task(artifact_root, "wf-cli-run-evidence", "research", "researcher", task_file).returncode == 0
+
+    missing = record_cli_run(
+        artifact_root,
+        "wf-cli-run-evidence",
+        "research",
+        report_file,
+        record_spawn_evidence=False,
+    )
+    assert missing.returncode != 0
+    assert "spawn evidence" in missing.stderr.lower()
+
+    assert run_cli(
+        artifact_root,
+        "record-spawn",
+        "--workflow-id",
+        "wf-cli-run-evidence",
+        "--task-id",
+        "research",
+        "--agent-id",
+        "agent-research",
+        "--actual-model",
+        "gpt-5.6-luna",
+    ).returncode == 0
+    mismatch = run_cli(
+        artifact_root,
+        "record-run",
+        "--workflow-id",
+        "wf-cli-run-evidence",
+        "--task-id",
+        "research",
+        "--agent-id",
+        "another-agent",
+        "--report-file",
+        str(report_file),
+    )
+    assert mismatch.returncode != 0
+    assert "agent id" in mismatch.stderr.lower()
+    assert record_cli_run(
+        artifact_root,
+        "wf-cli-run-evidence",
+        "research",
+        report_file,
+        record_spawn_evidence=False,
+    ).returncode == 0
 
 
 def test_cli_record_spawn_writes_actual_route_evidence(tmp_path: Path) -> None:
@@ -248,7 +393,9 @@ def test_verify_preserves_latest_spawn_evidence_in_final_acceptance() -> None:
     verify_workflow(workflow)
 
     evidence = workflow["finalAcceptance"]["spawnEvidence"]
-    assert evidence == [{"taskId": "impl", "latestSpawn": workflow["tasks"]["impl"]["latestSpawn"]}]
+    assert {item["taskId"] for item in evidence} == {"impl", "spec-review", "quality-review", "final"}
+    assert all(item["runId"] == workflow["tasks"][item["taskId"]]["lastRunId"] for item in evidence)
+    assert all(item["spawn"] == workflow["runs"][item["runId"]]["spawn"] for item in evidence)
 
 
 def test_parallel_writable_overlap_is_rejected() -> None:
@@ -277,6 +424,7 @@ def test_accepted_workflow_rejects_new_tasks_and_runs() -> None:
 def test_implementer_rerun_invalidates_stale_review_evidence() -> None:
     workflow = new_workflow("wf-stale-review")
     register_task(workflow, task_id="impl", role="implementer", scopes=("src",), writable=True)
+    record_spawn_for_task(workflow, "impl", "agent-impl")
     record_run(
         workflow,
         task_id="impl",
@@ -285,6 +433,7 @@ def test_implementer_rerun_invalidates_stale_review_evidence() -> None:
         run_id="impl-v1",
     )
     add_accepted_reviews(workflow)
+    record_spawn_for_task(workflow, "impl", "agent-impl")
     record_run(
         workflow,
         task_id="impl",
@@ -300,6 +449,7 @@ def test_implementer_rerun_invalidates_stale_review_evidence() -> None:
 def test_final_verifier_recorded_before_reviews_cannot_pass() -> None:
     workflow = new_workflow("wf-early-final")
     register_task(workflow, task_id="impl", role="implementer", scopes=("src",), writable=True)
+    record_spawn_for_task(workflow, "impl", "agent-impl")
     record_run(
         workflow,
         task_id="impl",
@@ -318,6 +468,7 @@ def test_final_verifier_recorded_before_reviews_cannot_pass() -> None:
 def test_reruns_invalidate_stale_final_verifier_snapshot(rerun_kind: str) -> None:
     workflow = ready_for_acceptance_workflow()
     if rerun_kind == "implementer":
+        record_spawn_for_task(workflow, "impl", "agent-impl")
         record_run(
             workflow,
             task_id="impl",
@@ -327,6 +478,7 @@ def test_reruns_invalidate_stale_final_verifier_snapshot(rerun_kind: str) -> Non
         )
         rerun_accepted_reviews(workflow, "after-impl")
     else:
+        record_spawn_for_task(workflow, "spec-review", "agent-spec-review")
         record_run(
             workflow,
             task_id="spec-review",
@@ -480,6 +632,18 @@ def test_concurrent_cli_record_runs_preserve_both_runs(tmp_path: Path) -> None:
     assert run_cli(artifact_root, "init", "--workflow-id", "wf-concurrent").returncode == 0
     for task_id in ("one", "two"):
         assert register_cli_task(artifact_root, "wf-concurrent", task_id, "researcher", task_file).returncode == 0
+        assert run_cli(
+            artifact_root,
+            "record-spawn",
+            "--workflow-id",
+            "wf-concurrent",
+            "--task-id",
+            task_id,
+            "--agent-id",
+            f"agent-{task_id}",
+            "--actual-model",
+            "gpt-5.6-luna",
+        ).returncode == 0
     commands = [
         [
             sys.executable,
@@ -507,7 +671,7 @@ def test_concurrent_cli_record_runs_preserve_both_runs(tmp_path: Path) -> None:
     assert all(process.returncode == 0 for process in processes), results
     workflow = json.loads((artifact_root / "workflow_wf-concurrent.json").read_text(encoding="utf-8"))
     assert {run["taskId"] for run in workflow["runs"].values()} == {"one", "two"}
-    assert workflow["revision"] == 4
+    assert workflow["revision"] == 6
 
 
 @pytest.mark.parametrize("started_at", ["not-a-timestamp", "2026-07-10T12:00:00"])
@@ -516,6 +680,18 @@ def test_cli_rejects_invalid_or_naive_started_at(tmp_path: Path, started_at: str
     task_file = write_task(tmp_path, "timestamp")
     assert run_cli(artifact_root, "init", "--workflow-id", "wf-timestamp").returncode == 0
     assert register_cli_task(artifact_root, "wf-timestamp", "research", "researcher", task_file).returncode == 0
+    assert run_cli(
+        artifact_root,
+        "record-spawn",
+        "--workflow-id",
+        "wf-timestamp",
+        "--task-id",
+        "research",
+        "--agent-id",
+        "agent-research",
+        "--actual-model",
+        "gpt-5.6-luna",
+    ).returncode == 0
 
     result = run_cli(
         artifact_root,

@@ -220,6 +220,10 @@ def record_spawn(
     task = _workflow_tasks(workflow).get(task_id)
     if task is None:
         raise WorkflowError(f"Unknown task: {task_id}")
+    if inherit_parent and fallback_reason is None:
+        raise WorkflowError("Inherited execution requires a fallback reason")
+    if actual_model != task["requestedModel"] and fallback_reason is None:
+        raise WorkflowError("Changed actual model requires a fallback reason")
     recorded_at = _now()
     spawn = {
         "agentId": agent_id,
@@ -255,6 +259,11 @@ def record_run(
     task = tasks.get(task_id)
     if task is None:
         raise WorkflowError(f"Unknown task: {task_id}")
+    spawn = task["latestSpawn"]
+    if spawn is None:
+        raise WorkflowError("Record run requires spawn evidence")
+    if spawn["agentId"] != agent_id:
+        raise WorkflowError("Record run agent ID must match latest spawn evidence")
     runs = _workflow_runs(workflow)
     run_id = _require_identifier(run_id or f"run-{len(runs) + 1}", "Run")
     if run_id in runs:
@@ -282,7 +291,7 @@ def record_run(
         "requestedModel": task["requestedModel"],
         "reasoningEffort": task["reasoningEffort"],
         "fallback": task["fallback"],
-        "spawn": task["latestSpawn"],
+        "spawn": spawn,
         "reportStatus": parsed_report.status,
         "reportFinalResult": parsed_report.final_result,
         "reportPath": report_path,
@@ -387,9 +396,13 @@ def verify_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
         "acceptedRevision": acceptance_revision,
         "implementerTaskIds": [task["taskId"] for task in implementers],
         "spawnEvidence": [
-            {"taskId": task["taskId"], "latestSpawn": task["latestSpawn"]}
+            {
+                "taskId": task["taskId"],
+                "runId": task["lastRunId"],
+                "spawn": runs[task["lastRunId"]]["spawn"],
+            }
             for task in tasks.values()
-            if task["latestSpawn"] is not None
+            if task["lastRunId"] is not None
         ],
     }
     return workflow

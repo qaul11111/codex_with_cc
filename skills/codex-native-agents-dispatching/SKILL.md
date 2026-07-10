@@ -20,9 +20,9 @@ python3 skills/codex-native-agents/scripts/native_agents.py register-task --work
 1. Validate the TaskFile.
 2. Initialize and register the workflow task with `native_agents.py`.
 3. For independent work, spawn every eligible task before waiting for any result.
-4. Call `spawn_agent` with `fork_context: false` and the full native task envelope. Immediately record the returned agent ID and the observed route: `python3 skills/codex-native-agents/scripts/native_agents.py record-spawn --workflow-id <workflow-id> --task-id <task-id> --agent-id <agent-id> --actual-model <host-model>`, or use `--inherit-parent --fallback-reason <reason>` when the host falls back.
+4. Call `spawn_agent` with `fork_context: false` and the full native task envelope. Immediately record the returned agent ID and the observed route: `python3 skills/codex-native-agents/scripts/native_agents.py record-spawn --workflow-id <workflow-id> --task-id <task-id> --agent-id <agent-id> --actual-model <host-model>`, or use `--inherit-parent --fallback-reason <reason>` when the host falls back. A different actual model also requires `--fallback-reason`.
 5. Continue only non-overlapping main-thread work while children run.
-6. Wait only when the critical path needs a result, then record the structured report: `python3 skills/codex-native-agents/scripts/native_agents.py record-run --workflow-id <workflow-id> --task-id <task-id> --agent-id <agent-id> --report-file <report.md>`.
+6. Wait only when the critical path needs a result, then record the structured report: `python3 skills/codex-native-agents/scripts/native_agents.py record-run --workflow-id <workflow-id> --task-id <task-id> --agent-id <agent-id> --report-file <report.md>`. `record-run` requires matching spawn evidence for the same agent ID.
 7. For implementers, register and run separate `spec` and `quality` reviewers plus a `final-verifier`; record each with `record-run` after its report is returned.
 8. Close every completed, failed, or interrupted agent, then run `python3 skills/codex-native-agents/scripts/native_agents.py verify --workflow-id <workflow-id>`.
 

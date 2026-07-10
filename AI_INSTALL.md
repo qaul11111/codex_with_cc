@@ -4,19 +4,22 @@ This repository is the local development source for `codex-native-agents` from [
 
 ## User-Scoped Setup
 
-Run these commands from a disposable directory, then replace only the newly
-generated scaffold after inspecting it. This creates a personal local source;
-it does not publish anything.
+Run these commands from the actual repository checkout root. The creator first
+creates its default marketplace file and a new scaffold. Replace only that
+fresh scaffold after inspecting it; this creates a local source and does not
+publish anything.
 
 ```bash
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+test -n "$REPO_ROOT"
 python3 /Users/wxl/.codex/skills/.system/plugin-creator/scripts/create_basic_plugin.py codex-native-agents --with-marketplace
 find ~/plugins/codex-native-agents -maxdepth 2 -type f -print
 # Continue only after confirming this is the new scaffold and contains no user work.
 rm -rf ~/plugins/codex-native-agents
-ln -s "$(pwd)" ~/plugins/codex-native-agents
+ln -s "$REPO_ROOT" ~/plugins/codex-native-agents
 python3 /Users/wxl/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py ~/plugins/codex-native-agents
-python3 /Users/wxl/.codex/skills/.system/plugin-creator/scripts/read_marketplace_name.py
-codex plugin add codex-native-agents@personal
+MARKETPLACE_NAME="$(python3 /Users/wxl/.codex/skills/.system/plugin-creator/scripts/read_marketplace_name.py)"
+codex plugin add "codex-native-agents@$MARKETPLACE_NAME"
 ```
 
 Do not hand-edit `marketplace.json` or `~/.codex/config.toml`. Confirm that the
