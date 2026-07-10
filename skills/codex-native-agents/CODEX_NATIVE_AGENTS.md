@@ -19,6 +19,21 @@ for all shared tokens and policy values.
 7. Failed or blocked work may escalate one model tier at most once; repeated
    failure returns control to the main thread.
 
+## Gate Provenance Boundary
+
+The native gate denies `spawn_agent` when an explicit child-session signal is
+present, even if an envelope says `DispatcherRole: main`. Codex 0.144 provides
+`transcript_path` in hook input (`transcriptPath` is also tolerated); the gate
+reads only the first JSONL `session_meta` record and treats `source.subagent`,
+`thread_source: subagent`, or a non-empty `parent_thread_id` as a child signal.
+Top-level hook-input versions of those signals are also denied.
+
+Transcript metadata is defense in depth, not a universal identity
+authentication mechanism. Hosts may omit the transcript field, and the file
+may be unavailable or unreadable. In those cases, the gate does not deny a
+otherwise compliant dispatch solely for missing provenance and relies on host tool isolation
+to keep worker sessions from invoking dispatch tools.
+
 ## Native Task Envelope
 
 Every child prompt contains this envelope:

@@ -6,6 +6,15 @@ import { fileURLToPath } from "node:url";
 
 const FALLBACK_CONTRACT = {
   spawn: { forkContext: false },
+  provenance: {
+    hostTranscriptFields: ["transcript_path", "transcriptPath"],
+    subagentSessionMetaSignals: [
+      "source.subagent",
+      "thread_source=subagent",
+      "parent_thread_id",
+    ],
+    fallbackPolicy: "host_tool_isolation",
+  },
   workerRoles: ["planner", "implementer", "researcher", "reviewer", "final-verifier"],
   modelProfiles: {},
   triggerPatterns: [
@@ -50,6 +59,7 @@ function readContract() {
       ...FALLBACK_CONTRACT,
       ...contract,
       spawn: { ...FALLBACK_CONTRACT.spawn, ...(contract.spawn || {}) },
+      provenance: { ...FALLBACK_CONTRACT.provenance, ...(contract.provenance || {}) },
       taskEnvelope: { ...FALLBACK_CONTRACT.taskEnvelope, ...(contract.taskEnvelope || {}) },
       workerRoles: Array.isArray(contract.workerRoles)
         ? contract.workerRoles
@@ -68,6 +78,7 @@ const CONTRACT = readContract();
 const TRIGGER_PATTERNS = CONTRACT.triggerPatterns.map((pattern) => new RegExp(pattern, "i"));
 const WORKER_ROLES = new Set(CONTRACT.workerRoles.map((role) => String(role)));
 const MODEL_PROFILES = new Set(Object.keys(CONTRACT.modelProfiles));
+const TRANSCRIPT_PATH_FIELDS = CONTRACT.provenance.hostTranscriptFields;
 // Native workflows must not launch a second agent runtime through shell tools.
 // Assemble the historical names so the removal scan still detects any runnable
 // legacy entrypoint accidentally reintroduced elsewhere in the active surface.
@@ -127,6 +138,73 @@ function prop(input, snakeName, camelName) {
     return input[camelName];
   }
   return undefined;
+}
+
+function transcriptPath(input) {
+  for (const field of TRANSCRIPT_PATH_FIELDS) {
+    if (input && Object.prototype.hasOwnProperty.call(input, field)) {
+      return input[field];
+    }
+  }
+  return undefined;
+}
+
+function readSessionMetaFromTranscript(input) {
+  const filePath = transcriptPath(input);
+  if (typeof filePath !== "string" || !filePath.trim()) {
+    return null;
+  }
+
+  let descriptor;
+  try {
+    descriptor = fs.openSync(filePath, "r");
+    const chunks = [];
+    let bytesRead = 0;
+    const buffer = Buffer.allocUnsafe(16 * 1024);
+    while (bytesRead < 1024 * 1024) {
+      const read = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (read === 0) {
+        break;
+      }
+      const newline = buffer.indexOf(0x0a, 0);
+      chunks.push(Buffer.from(buffer.subarray(0, newline === -1 ? read : newline)));
+      bytesRead += newline === -1 ? read : newline;
+      if (newline !== -1) {
+        const event = JSON.parse(Buffer.concat(chunks, bytesRead).toString("utf8"));
+        return event?.type === "session_meta" && event.payload && typeof event.payload === "object"
+          ? event.payload
+          : null;
+      }
+    }
+  } catch {
+    // Host transcript metadata is supplemental; isolation is the fallback boundary.
+  } finally {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+  }
+  return null;
+}
+
+function childProvenanceSignal(value) {
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  if (value.source && typeof value.source === "object"
+    && Object.prototype.hasOwnProperty.call(value.source, "subagent")) {
+    return "source.subagent";
+  }
+  if (String(prop(value, "thread_source", "threadSource") || "").toLowerCase() === "subagent") {
+    return "thread_source=subagent";
+  }
+  if (String(prop(value, "parent_thread_id", "parentThreadId") || "").trim()) {
+    return "parent_thread_id";
+  }
+  return "";
+}
+
+function childSessionProvenance(input) {
+  return childProvenanceSignal(input) || childProvenanceSignal(readSessionMetaFromTranscript(input));
 }
 
 function textItems(input) {
@@ -361,7 +439,7 @@ function handlePreToolUse(input) {
   const payload = toolInput(input);
 
   if (isShellTool(name)) {
-    const problem = blockedShellProblem(prop(payload, "command", "command") || "");
+    const problem = blockedShellProblem(prop(payload, "command", "cmd") || "");
     if (problem) {
       writeJson(deny(`native agent gate blocked ${name}: ${problem}.`));
     }
@@ -369,6 +447,11 @@ function handlePreToolUse(input) {
   }
 
   if (isSpawnTool(name)) {
+    const provenance = childSessionProvenance(input);
+    if (provenance) {
+      writeJson(deny(`native agent gate blocked ${name}: child-session provenance (${provenance}) forbids spawn_agent.`));
+      return;
+    }
     const problems = validateSpawn(payload);
     if (problems.length > 0) {
       writeJson(deny(`native agent gate blocked ${name}: ${problems.join("; ")}.`));
@@ -380,6 +463,11 @@ function handlePreToolUse(input) {
     const nestedName = item?.recipient_name || item?.recipientName || item?.tool_name || item?.toolName || "";
     if (!isSpawnTool(nestedName)) {
       continue;
+    }
+    const provenance = childSessionProvenance(input);
+    if (provenance) {
+      writeJson(deny(`native agent gate blocked nested ${nestedName}: child-session provenance (${provenance}) forbids spawn_agent.`));
+      return;
     }
     const nestedInput = item?.parameters || item?.tool_input || item?.toolInput || {};
     const problems = validateSpawn(nestedInput);

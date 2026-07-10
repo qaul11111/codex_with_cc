@@ -123,3 +123,25 @@ DispatcherRole: main
     assert "cannot call `spawn_agent` recursively" in skill
     assert "main thread owns dispatch" in human_contract
     assert "cannot call `spawn_agent` recursively" in human_contract
+
+
+def test_contract_documents_host_tool_isolation_provenance_boundary(
+    repo: Path, contract: dict[str, object]
+) -> None:
+    provenance = contract["provenance"]
+    skill = (repo / "skills/codex-native-agents/SKILL.md").read_text(encoding="utf-8")
+    human_contract = (repo / "skills/codex-native-agents/CODEX_NATIVE_AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert provenance == {
+        "hostTranscriptFields": ["transcript_path", "transcriptPath"],
+        "subagentSessionMetaSignals": [
+            "source.subagent",
+            "thread_source=subagent",
+            "parent_thread_id",
+        ],
+        "fallbackPolicy": "host_tool_isolation",
+    }
+    assert "host tool isolation" in skill
+    assert "host tool isolation" in human_contract

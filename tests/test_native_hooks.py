@@ -76,6 +76,17 @@ def denied(output: dict[str, object]) -> str:
     return str(specific["permissionDecisionReason"])
 
 
+def write_transcript(
+    path: Path, session_payload: dict[str, object], *subsequent_events: dict[str, object]
+) -> Path:
+    events = [{"type": "session_meta", "payload": session_payload}, *subsequent_events]
+    path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_hooks_config_has_only_hooks_and_native_entrypoint() -> None:
     config = json.loads((REPO / "hooks" / "hooks.json").read_text(encoding="utf-8"))
 
@@ -201,6 +212,67 @@ def test_worker_nested_spawn_without_main_dispatch_envelope_is_denied(run_hook) 
     assert "native task envelope" in denied(output)
 
 
+def test_main_session_meta_transcript_allows_compliant_spawn(
+    run_hook, compliant_spawn, tmp_path: Path
+) -> None:
+    transcript = write_transcript(
+        tmp_path / "main.jsonl",
+        {"thread_source": "main", "source": {}},
+        {
+            "type": "event_msg",
+            "payload": {
+                "thread_source": "subagent",
+                "parent_thread_id": "not-read-after-session-meta",
+            },
+        },
+    )
+    compliant_spawn["transcript_path"] = str(transcript)
+
+    assert run_hook(compliant_spawn) == {}
+
+
+@pytest.mark.parametrize("path_field", ["transcript_path", "transcriptPath"])
+def test_subagent_session_meta_transcript_denies_spawn_despite_main_envelope(
+    run_hook, compliant_spawn, tmp_path: Path, path_field: str
+) -> None:
+    transcript = write_transcript(
+        tmp_path / "subagent.jsonl",
+        {
+            "source": {"subagent": {"thread_spawn": {"depth": 1}}},
+            "thread_source": "subagent",
+            "parent_thread_id": "parent-thread-id",
+        },
+    )
+    compliant_spawn[path_field] = str(transcript)
+
+    assert "child-session provenance" in denied(run_hook(compliant_spawn))
+
+
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        {"thread_source": "subagent"},
+        {"parent_thread_id": "parent-thread-id"},
+        {"parentThreadId": "parent-thread-id"},
+        {"source": {"subagent": {"thread_spawn": {"depth": 1}}}},
+    ],
+)
+def test_explicit_top_level_child_provenance_denies_spawn_despite_main_envelope(
+    run_hook, compliant_spawn, provenance: dict[str, object]
+) -> None:
+    compliant_spawn.update(provenance)
+
+    assert "child-session provenance" in denied(run_hook(compliant_spawn))
+
+
+def test_missing_or_unreadable_transcript_does_not_deny_compliant_spawn(
+    run_hook, compliant_spawn, tmp_path: Path
+) -> None:
+    compliant_spawn["transcript_path"] = str(tmp_path / "missing.jsonl")
+
+    assert run_hook(compliant_spawn) == {}
+
+
 @pytest.mark.parametrize(
     ("tool_name", "command"),
     [
@@ -222,6 +294,18 @@ def test_legacy_agent_execution_is_denied_in_shell_boundaries(
             "hook_event_name": "PreToolUse",
             "tool_name": tool_name,
             "tool_input": {"command": command},
+        }
+    )
+
+    assert "non-native agent executable" in denied(output)
+
+
+def test_legacy_agent_execution_is_denied_when_exec_command_uses_cmd(run_hook) -> None:
+    output = run_hook(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "functions.exec_command",
+            "tool_input": {"cmd": f'{BLOCKED_AGENT_EXECUTABLE} -p "work"'},
         }
     )
 

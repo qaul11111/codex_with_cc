@@ -44,6 +44,19 @@ the requested verification, and return the required structured report. The main
 thread uses native agent lifecycle tools to review, request bounded rework, and
 close completed agents.
 
+## Gate Provenance Boundary
+
+The hook rejects `spawn_agent` when a host-provided transcript's first
+`session_meta` record explicitly identifies a child session through
+`source.subagent`, `thread_source: subagent`, or `parent_thread_id`; it also
+rejects corresponding top-level hook-input signals. Codex 0.144 exposes
+`transcript_path`, with `transcriptPath` accepted for compatibility.
+
+This is defense in depth, not a hard identity proof. A host can omit the
+transcript path or make it unreadable, so a compliant dispatch is not rejected
+solely for absent provenance. In that case the workflow depends on host tool isolation
+to prevent workers from accessing `spawn_agent`.
+
 ## Acceptance
 
 Implementer work requires accepted `spec` review, `quality` review, and a
