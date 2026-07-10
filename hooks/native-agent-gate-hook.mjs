@@ -153,7 +153,8 @@ function isSpawnTool(name) {
 
 function isShellTool(name) {
   const normalized = String(name).toLowerCase();
-  return normalized === "bash" || toolNameTail(name) === "shell_command";
+  const tail = toolNameTail(name);
+  return normalized === "bash" || tail === "shell_command" || tail === "exec_command";
 }
 
 function parseEnvelope(text) {
@@ -228,19 +229,62 @@ function shellSegments(command) {
   return String(command).split(/(?:&&|\|\||;|\n)/).map((segment) => segment.trim());
 }
 
-function legacyShellProblem(command) {
-  for (const segment of shellSegments(command)) {
-    const direct = segment.match(/^(?:env\s+(?:(?:[A-Za-z_]\w*)=\S+\s+)*)?(?:(?:[A-Za-z_]\w*)=\S+\s+)*(?:[\w./:-]*[\\/])?(claude(?:\.(?:cmd|exe))?|delegate_to_claude(?:\.[A-Za-z0-9]+)?)(?=\s|$)/i);
-    const interpreter = segment.match(/^(?:bash|sh|zsh|pwsh|powershell)\b[^\n]*?\b(delegate_to_claude(?:\.[A-Za-z0-9]+)?)(?=\s|$)/i);
-    const executable = direct?.[1] || interpreter?.[1];
-    if (!executable) {
+function unwrapCommandPosition(segment) {
+  let remaining = segment.trim();
+  while (remaining) {
+    const commandWrapper = remaining.match(/^command\s+/i);
+    if (commandWrapper) {
+      remaining = remaining.slice(commandWrapper[0].length).trimStart();
       continue;
     }
-    return executable.toLowerCase().startsWith("claude")
-      ? "direct claude execution is forbidden"
-      : "delegate_to_claude execution is forbidden";
+    const envWrapper = remaining.match(/^env\s+(?:(?:[A-Za-z_]\w*)=(?:\S+)\s+)*/i);
+    if (envWrapper && envWrapper[0].trim() !== "env") {
+      remaining = remaining.slice(envWrapper[0].length).trimStart();
+      continue;
+    }
+    const assignment = remaining.match(/^(?:[A-Za-z_]\w*)=(?:\S+)\s+/);
+    if (assignment) {
+      remaining = remaining.slice(assignment[0].length).trimStart();
+      continue;
+    }
+    break;
+  }
+  return remaining;
+}
+
+function shellCommandBody(segment) {
+  const match = unwrapCommandPosition(segment).match(
+    /^(?:bash|sh|zsh)\s+(?:-[A-Za-z]*c\s+)(["'])([\s\S]*?)\1\s*$/i,
+  );
+  return match?.[2] || "";
+}
+
+function legacyExecutable(segment) {
+  const command = unwrapCommandPosition(segment);
+  const match = command.match(
+    /^(?:[\w./:-]*[\\/])?(claude(?:\.(?:cmd|exe))?|delegate_to_claude(?:\.[A-Za-z0-9]+)?)(?=\s|$)/i,
+  );
+  return match?.[1] || "";
+}
+
+function legacyShellProblem(command) {
+  for (const segment of shellSegments(command)) {
+    const executable = legacyExecutable(segment) || legacyExecutable(shellCommandBody(segment));
+    if (executable) {
+      return executable.toLowerCase().startsWith("claude")
+        ? "direct claude execution is forbidden"
+        : "delegate_to_claude execution is forbidden";
+    }
   }
   return "";
+}
+
+function hasDelegationIntent(prompt) {
+  const text = String(prompt);
+  const englishAction = /\b(?:delegate|dispatch|start|spawn|launch)\b/i;
+  const englishWorker = /\b(?:subagents?|child\s+agents?|workers?)\b/i;
+  const chineseIntent = /(?:开启|启动|安排|委派|派遣|分配).{0,20}(?:子代理|子线程|工作者|workers?)/;
+  return (englishAction.test(text) && englishWorker.test(text)) || chineseIntent.test(text);
 }
 
 function nestedToolUses(input) {
@@ -291,7 +335,7 @@ const name = eventName(input);
 if (name === "SessionStart") {
   writeJson(additionalContext(name));
 } else if (name === "UserPromptSubmit") {
-  if (TRIGGER_PATTERNS.some((pattern) => pattern.test(promptText(input)))) {
+  if (hasDelegationIntent(promptText(input))) {
     writeJson(additionalContext(name));
   }
 } else if (name === "PreToolUse") {

@@ -25,7 +25,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash|.*shell_command.*|spawn_agent|.*spawn_agent.*|Task|subagent|.*subagent.*|agent|worker|multi_tool_use\\.parallel|mcp__.*",
+        "matcher": "Bash|.*(?:shell_command|exec_command).*|spawn_agent|.*spawn_agent.*|Task|subagent|.*subagent.*|agent|worker|multi_tool_use\\.parallel|mcp__.*",
         "hooks": [
           {
             "type": "command",

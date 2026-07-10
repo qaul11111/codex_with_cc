@@ -78,9 +78,12 @@ def test_hooks_config_has_only_hooks_and_native_entrypoint() -> None:
     config = json.loads((REPO / "hooks" / "hooks.json").read_text(encoding="utf-8"))
 
     assert set(config) == {"hooks"}
-    for event_name in ("SessionStart", "UserPromptSubmit", "PreToolUse"):
-        command = config["hooks"][event_name][0]["hooks"][0]["command"]
-        assert "native-agent-gate-hook.mjs" in command
+    for event_hooks in config["hooks"].values():
+        for matcher in event_hooks:
+            for hook in matcher["hooks"]:
+                command = hook["command"]
+                assert "native-agent-gate-hook.mjs" in command
+                assert "subagent-gate-hook.mjs" not in command
 
 
 def test_spawn_requires_native_task_envelope(run_hook) -> None:
@@ -215,17 +218,27 @@ def test_read_only_legacy_inspection_is_allowed(run_hook, command: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("command", "expected"),
+    ("tool_name", "command", "expected"),
     [
-        ('claude -p "do delegated work"', "direct claude execution"),
-        ("./scripts/delegate_to_claude.sh", "delegate_to_claude execution"),
+        ("functions.exec_command", 'claude -p "work"', "direct claude execution"),
+        ("Bash", "bash -c 'claude -p \"work\"'", "direct claude execution"),
+        (
+            "Bash",
+            "zsh -lc 'delegate_to_claude.sh -TaskFile task.md'",
+            "delegate_to_claude execution",
+        ),
+        ("Bash", 'command claude -p "work"', "direct claude execution"),
+        ("Bash", 'env FOO=bar claude -p "work"', "direct claude execution"),
+        ("Bash", "./scripts/delegate_to_claude.sh", "delegate_to_claude execution"),
     ],
 )
-def test_executable_legacy_commands_are_denied(run_hook, command: str, expected: str) -> None:
+def test_executable_legacy_commands_are_denied(
+    run_hook, tool_name: str, command: str, expected: str
+) -> None:
     output = run_hook(
         {
             "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
+            "tool_name": tool_name,
             "tool_input": {"command": command},
         }
     )
@@ -233,8 +246,16 @@ def test_executable_legacy_commands_are_denied(run_hook, command: str, expected:
     assert expected in denied(output)
 
 
-def test_unrelated_prompt_is_ignored(run_hook) -> None:
-    assert run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "Explain README."}) == {}
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Explain README.",
+        "Explain the delegation pattern in this README.",
+        "解释文档里的子代理工作流",
+    ],
+)
+def test_explanation_only_prompt_is_ignored(run_hook, prompt: str) -> None:
+    assert run_hook({"hook_event_name": "UserPromptSubmit", "prompt": prompt}) == {}
 
 
 def test_session_start_injects_compact_worker_guidance(run_hook) -> None:
@@ -246,11 +267,20 @@ def test_session_start_injects_compact_worker_guidance(run_hook) -> None:
     assert len(context) < 900
 
 
-def test_trigger_prompt_injects_compact_worker_guidance(run_hook) -> None:
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Delegate this bounded task to a child agent.",
+        "Start two subagents",
+        "请开启两个子代理",
+        "Explain the plan, then delegate it to two workers",
+    ],
+)
+def test_explicit_delegation_prompt_injects_compact_worker_guidance(run_hook, prompt: str) -> None:
     output = run_hook(
         {
             "hook_event_name": "UserPromptSubmit",
-            "prompt": "Delegate this bounded task to a child agent.",
+            "prompt": prompt,
         }
     )
     specific = output["hookSpecificOutput"]
