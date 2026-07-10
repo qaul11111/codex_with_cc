@@ -4,9 +4,11 @@ import json
 import os
 import re
 import tempfile
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from .common import ContractError
 from .contract import load_contract
@@ -54,6 +56,36 @@ def _workflow_runs(workflow: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return runs
 
 
+def _workflow_revision(workflow: dict[str, Any]) -> int:
+    revision = workflow.get("revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+        raise WorkflowError("Workflow record has invalid revision")
+    return revision
+
+
+def _advance_revision(workflow: dict[str, Any]) -> int:
+    revision = _workflow_revision(workflow) + 1
+    workflow["revision"] = revision
+    return revision
+
+
+def _ensure_mutable(workflow: dict[str, Any]) -> None:
+    if workflow.get("status") == "accepted":
+        raise WorkflowError("Accepted workflows are immutable; start a new WorkflowId")
+
+
+def _validate_started_at(started_at: str | None) -> str | None:
+    if started_at is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(started_at.removesuffix("Z") + "+00:00" if started_at.endswith("Z") else started_at)
+    except ValueError as error:
+        raise WorkflowError("startedAt must be a timezone-aware ISO-8601 timestamp") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise WorkflowError("startedAt must be a timezone-aware ISO-8601 timestamp")
+    return started_at
+
+
 def _route(role: str, complexity: str) -> Any:
     try:
         return route_for_task(role, complexity)
@@ -68,6 +100,7 @@ def new_workflow(workflow_id: str) -> dict[str, Any]:
         "invocationContract": load_contract()["invocationContract"],
         "workflowId": workflow_id,
         "status": "running",
+        "revision": 0,
         "tasks": {},
         "runs": {},
         "finalAcceptance": None,
@@ -89,6 +122,8 @@ def register_task(
     review_kind: str | None = None,
 ) -> dict[str, Any]:
     _workflow_id(workflow)
+    _ensure_mutable(workflow)
+    _workflow_revision(workflow)
     task_id = _require_identifier(task_id, "Task")
     tasks = _workflow_tasks(workflow)
     if task_id in tasks:
@@ -142,12 +177,16 @@ def register_task(
         "fallback": route.fallback,
         "reviewForTaskId": review_for_task_id,
         "reviewKind": review_kind,
+        "lastRunId": None,
         "latestRunId": None,
         "latestReportStatus": None,
         "latestReportFinalResult": None,
     }
     if role == "implementer":
         task["reviews"] = {kind: None for kind in contract["reviewKinds"]}
+    if role == "final-verifier":
+        task["lastAcceptanceSnapshot"] = None
+    _advance_revision(workflow)
     tasks[task_id] = task
     return task
 
@@ -163,6 +202,8 @@ def record_run(
     started_at: str | None = None,
 ) -> dict[str, Any]:
     _workflow_id(workflow)
+    _ensure_mutable(workflow)
+    _workflow_revision(workflow)
     task_id = _require_identifier(task_id, "Task")
     tasks = _workflow_tasks(workflow)
     task = tasks.get(task_id)
@@ -179,7 +220,14 @@ def record_run(
     if parsed_report.role != task["role"]:
         raise WorkflowError("Report role must match the registered task role")
 
+    validated_started_at = _validate_started_at(started_at)
+    if task["role"] == "reviewer":
+        reviewed_task = tasks[task["reviewForTaskId"]]
+        if reviewed_task["lastRunId"] is None:
+            raise WorkflowError("Reviewer requires a recorded implementer run")
+
     recorded_at = _now()
+    recorded_revision = _advance_revision(workflow)
     run = {
         "runId": run_id,
         "agentId": agent_id,
@@ -191,50 +239,105 @@ def record_run(
         "reportStatus": parsed_report.status,
         "reportFinalResult": parsed_report.final_result,
         "reportPath": report_path,
-        "startedAt": started_at or recorded_at,
+        "startedAt": validated_started_at or recorded_at,
         "recordedAt": recorded_at,
+        "recordedRevision": recorded_revision,
     }
     decision = "accepted" if parsed_report.status == "DONE" else "rejected"
     if task["role"] in {"reviewer", "final-verifier"}:
         run["reviewDecision"] = decision
     runs[run_id] = run
+    task["lastRunId"] = run_id
     task["latestRunId"] = run_id
     task["latestReportStatus"] = parsed_report.status
     task["latestReportFinalResult"] = parsed_report.final_result
 
     if task["role"] == "reviewer":
-        reviewed_task = tasks[task["reviewForTaskId"]]
         reviewed_task["reviews"][task["reviewKind"]] = {
             "decision": decision,
             "reviewerTaskId": task_id,
             "reviewerRunId": run_id,
+            "reviewedRunId": reviewed_task["lastRunId"],
+            "reviewKind": task["reviewKind"],
             "recordedAt": recorded_at,
+            "recordedRevision": recorded_revision,
         }
+    if task["role"] == "final-verifier":
+        snapshot = _acceptance_snapshot(tasks) if decision == "accepted" else None
+        run["acceptanceSnapshot"] = snapshot
+        task["lastAcceptanceSnapshot"] = snapshot
     return run
+
+
+def _acceptance_snapshot(tasks: dict[str, dict[str, Any]]) -> list[dict[str, str | None]]:
+    snapshot: list[dict[str, str | None]] = []
+    for task_id, task in sorted(tasks.items()):
+        if task["role"] != "implementer":
+            continue
+        reviews = task["reviews"]
+        snapshot.append(
+            {
+                "implementerTaskId": task_id,
+                "implementerRunId": task["lastRunId"],
+                "specReviewerRunId": reviews["spec"]["reviewerRunId"] if reviews["spec"] and reviews["spec"]["decision"] == "accepted" else None,
+                "qualityReviewerRunId": reviews["quality"]["reviewerRunId"] if reviews["quality"] and reviews["quality"]["decision"] == "accepted" else None,
+            }
+        )
+    return snapshot
 
 
 def verify_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
     _workflow_id(workflow)
+    if workflow.get("status") == "accepted":
+        return workflow
+    _workflow_revision(workflow)
     tasks = _workflow_tasks(workflow)
+    runs = _workflow_runs(workflow)
     implementers = [task for task in tasks.values() if task["role"] == "implementer"]
     for task in implementers:
         if task["latestReportStatus"] != "DONE":
             raise WorkflowError(f"Implementer task is not DONE: {task['taskId']}")
+        implementer_run = runs.get(task["lastRunId"])
+        if implementer_run is None:
+            raise WorkflowError(f"Implementer task has no recorded run: {task['taskId']}")
         for review_kind in load_contract()["reviewKinds"]:
             review = task["reviews"][review_kind]
             if review is None or review["decision"] != "accepted":
                 raise WorkflowError(f"Implementer task requires accepted {review_kind} review: {task['taskId']}")
-    if implementers and not any(
-        task["role"] == "final-verifier" and task["latestReportStatus"] == "DONE"
+            reviewer_run = runs.get(review["reviewerRunId"])
+            if review["reviewedRunId"] != task["lastRunId"]:
+                raise WorkflowError(f"Accepted {review_kind} review must reference the current implementer run")
+            if reviewer_run is None or reviewer_run["recordedRevision"] <= implementer_run["recordedRevision"]:
+                raise WorkflowError(f"Accepted {review_kind} review must follow the implementer run")
+
+    snapshots = _acceptance_snapshot(tasks)
+    final_verifiers = [
+        task
         for task in tasks.values()
-    ):
+        if task["role"] == "final-verifier" and task["latestReportStatus"] == "DONE"
+    ]
+    if implementers and not final_verifiers:
         raise WorkflowError("Implementer workflow requires an accepted DONE final verifier")
+    if implementers:
+        final_task = final_verifiers[-1]
+        final_run = runs.get(final_task["lastRunId"])
+        if final_run is None or final_run.get("reviewDecision") != "accepted":
+            raise WorkflowError("Implementer workflow requires an accepted DONE final verifier")
+        if final_run.get("acceptanceSnapshot") != snapshots or final_task.get("lastAcceptanceSnapshot") != snapshots:
+            raise WorkflowError("final verifier snapshot is stale")
+        for snapshot in snapshots:
+            for review_run_id in (snapshot["specReviewerRunId"], snapshot["qualityReviewerRunId"]):
+                reviewer_run = runs.get(review_run_id)
+                if reviewer_run is None or final_run["recordedRevision"] <= reviewer_run["recordedRevision"]:
+                    raise WorkflowError("final verifier must follow all accepted reviews")
 
     accepted_at = _now()
+    acceptance_revision = _advance_revision(workflow)
     workflow["status"] = "accepted"
     workflow["finalAcceptance"] = {
         "status": "accepted",
         "acceptedAt": accepted_at,
+        "acceptedRevision": acceptance_revision,
         "implementerTaskIds": [task["taskId"] for task in implementers],
     }
     return workflow
@@ -243,6 +346,42 @@ def verify_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
 def workflow_path(artifact_root: Path, workflow_id: str) -> Path:
     workflow_id = _require_identifier(workflow_id, "Workflow")
     return artifact_root / f"workflow_{workflow_id}.json"
+
+
+@contextmanager
+def workflow_lock(
+    artifact_root: Path,
+    workflow_id: str,
+    timeout_seconds: float = 5.0,
+    retry_seconds: float = 0.05,
+) -> Iterator[None]:
+    path = workflow_path(artifact_root, workflow_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f".{path.name}.lock")
+    deadline = time.monotonic() + timeout_seconds
+    acquired = False
+    try:
+        while True:
+            try:
+                descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise WorkflowError(f"Timed out acquiring workflow lock: {workflow_id}")
+                time.sleep(retry_seconds)
+            else:
+                acquired = True
+                try:
+                    os.write(descriptor, str(os.getpid()).encode("ascii"))
+                finally:
+                    os.close(descriptor)
+                break
+        yield
+    finally:
+        if acquired:
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def write_workflow(artifact_root: Path, workflow: dict[str, Any]) -> Path:
@@ -285,6 +424,7 @@ __all__ = [
     "record_run",
     "register_task",
     "verify_workflow",
+    "workflow_lock",
     "workflow_path",
     "write_workflow",
 ]

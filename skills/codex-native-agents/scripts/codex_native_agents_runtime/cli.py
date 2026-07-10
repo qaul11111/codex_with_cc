@@ -11,6 +11,8 @@ from .workflow import (
     record_run,
     register_task,
     verify_workflow,
+    workflow_lock,
+    workflow_path,
     write_workflow,
 )
 
@@ -65,37 +67,40 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     artifact_root = getattr(args, "artifact_root", DEFAULT_ARTIFACT_ROOT)
     try:
-        if args.command == "init":
-            path = write_workflow(artifact_root, new_workflow(args.workflow_id))
-        else:
-            workflow = load_workflow(artifact_root, args.workflow_id)
-            if args.command == "register-task":
-                register_task(
-                    workflow,
-                    task_id=args.task_id,
-                    role=args.role,
-                    scopes=args.scope,
-                    writable=args.writable,
-                    parallel=args.parallel,
-                    task_file=args.task_file,
-                    model_profile=args.model_profile,
-                    complexity=args.complexity,
-                    review_for_task_id=args.review_for_task_id,
-                    review_kind=args.review_kind,
-                )
-            elif args.command == "record-run":
-                record_run(
-                    workflow,
-                    task_id=args.task_id,
-                    agent_id=args.agent_id,
-                    report=args.report_file.read_text(encoding="utf-8"),
-                    report_path=str(args.report_file),
-                    run_id=args.run_id,
-                    started_at=args.started_at,
-                )
-            elif args.command == "verify":
-                verify_workflow(workflow)
-            path = write_workflow(artifact_root, workflow)
+        with workflow_lock(artifact_root, args.workflow_id):
+            if args.command == "init":
+                if workflow_path(artifact_root, args.workflow_id).exists():
+                    raise WorkflowError(f"Workflow already exists: {args.workflow_id}")
+                path = write_workflow(artifact_root, new_workflow(args.workflow_id))
+            else:
+                workflow = load_workflow(artifact_root, args.workflow_id)
+                if args.command == "register-task":
+                    register_task(
+                        workflow,
+                        task_id=args.task_id,
+                        role=args.role,
+                        scopes=args.scope,
+                        writable=args.writable,
+                        parallel=args.parallel,
+                        task_file=args.task_file,
+                        model_profile=args.model_profile,
+                        complexity=args.complexity,
+                        review_for_task_id=args.review_for_task_id,
+                        review_kind=args.review_kind,
+                    )
+                elif args.command == "record-run":
+                    record_run(
+                        workflow,
+                        task_id=args.task_id,
+                        agent_id=args.agent_id,
+                        report=args.report_file.read_text(encoding="utf-8"),
+                        report_path=str(args.report_file),
+                        run_id=args.run_id,
+                        started_at=args.started_at,
+                    )
+                elif args.command == "verify":
+                    verify_workflow(workflow)
+                path = write_workflow(artifact_root, workflow)
     except (OSError, ValueError, WorkflowError) as error:
         parser.error(str(error))
         return 2
