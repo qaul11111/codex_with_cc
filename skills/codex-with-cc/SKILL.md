@@ -36,7 +36,7 @@ Use this workflow as a Superpowers-style staged control loop, not as a prompt sh
 1. Design gate: clarify intent, constraints, success criteria, and acceptance evidence before dispatch.
 2. Plan gate: split work into bounded task files with `Goal`, `Allowed Scope`, `Forbidden Actions`, `Acceptance Criteria`, `Verification`, and `Report Requirements`.
 3. Task validation gate: run `validate_delegate_task.*` when preparing task files or when scope/review metadata is easy to get wrong.
-4. Dispatch gate: use fresh child threads that inherit the main-thread model, set `reasoning_effort: medium`, and use `fork_context: false`.
+4. Dispatch gate: use fresh child threads that inherit the main-thread model and reasoning effort; omit the field or set `fork_context: false`.
 5. Implementer gate: require test-first or verification-first evidence when changing behavior.
 6. Review gate: review every implementation in two passes, spec compliance first, then code quality and regression risk.
 7. Final-verifier gate: finish only after workflow-level verification confirms run artifacts, workflow artifacts, accepted review gates, final-verifier evidence, parallel scope safety, session continuity when relevant, and repository tests support acceptance.
@@ -48,6 +48,7 @@ The Codex child thread must:
 - Set `CODEX_CLAUDE_CHILD_THREAD=1` before invoking the selected bundled delegate runner.
 - Pass task instructions through `.codex/codex_with_cc/tasks/<yyyyMMdd>/<HHmmssfff>-<short-id>-<task-name>.md` with `-TaskFile`.
 - Pass `-WorkflowId`, `-TaskId`, `-Role`, and `-SessionKey`.
+- Reviewer runs must also pass `-ReviewForTaskId`, `-ReviewForRunId`, and `-ReviewKind`; the run id must be the target implementer's current run.
 - Avoid legacy inline `-Task`, legacy `-Mode`, and implicit session-key fallback.
 - Keep changes inside the delegated scope and pass `-Scope` for any parallel writable work.
 - Run the requested verification only for code-capable Claude worker tasks. Report-only OpenAI-compatible tasks must not execute shell tests and should treat `-Tests` as report requirements.
@@ -72,8 +73,10 @@ In the main Codex thread:
 - Understand the user request, define scope, choose serial or parallel delegation, and review all worker results.
 - Prefer serial execution when write scopes overlap or acceptance criteria are still unstable.
 - Use parallel execution only for independent read-only tasks or writable tasks with explicit non-overlapping `-Scope` values.
+- Spawn every independent task before waiting, batch-wait on all active agent ids, and process whichever finishes first.
+- Immediately record every returned agent id with `record-agent-spawn`; after `close_agent`, record the matching closure with `record-agent-close`. Close failed and interrupted attempts too.
 - Do not run `claude` directly.
-- Do not run bundled delegate scripts directly except when `CODEX_WITH_CC.md` explicitly allows the trusted local terminal fallback.
+- Do not run bundled delegate scripts directly except when `CODEX_WITH_CC.md` explicitly allows the trusted local terminal fallback; that fallback must pass `-TrustedLocalFallback`.
 - Verify each run with `verify_delegate_run.*` or `verify_delegate_artifacts.*`.
 - Verify the whole workflow with `verify_delegate_workflow.*`; use `verify_delegate_chain.*` when validating primary/parallel session continuity.
 - Reject implementer work until both `spec` and `quality` reviewer runs are accepted.

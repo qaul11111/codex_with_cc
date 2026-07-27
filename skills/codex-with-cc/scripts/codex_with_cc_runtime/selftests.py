@@ -39,7 +39,7 @@ def run_delegate_subprocess(args: list[str], env: dict[str, str] | None = None) 
     if env:
         merged_env.update(env)
     return subprocess.run(
-        [sys.executable, str(runtime_python_root() / "delegate_to_claude.py"), *args],
+        [sys.executable, str(runtime_python_root() / "delegate_to_claude.py"), *args, "-TrustedLocalFallback"],
         cwd=str(repo_root()),
         text=True,
         capture_output=True,

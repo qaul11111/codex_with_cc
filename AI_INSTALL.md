@@ -40,12 +40,12 @@ Codex 主线程 -> Codex spawn_agent 子线程 -> 已安装插件中的 delegate
 - TaskFile 必须包含 `Goal`、`Allowed Scope`、`Forbidden Actions`、`Acceptance Criteria`、`Verification`、`Report Requirements`。
 - TaskFile 不能为空段、不能保留明显占位符，`Report Requirements` 必须列出完整报告标题；复杂任务派发前可先运行 `validate_delegate_task.*` 预检。
 - 旧式 inline `-Task`、旧式 `-Mode`、隐式 session key fallback 都不保留。
-- reviewer 必须额外传 `-ReviewForTaskId` 和 `-ReviewKind spec` 或 `-ReviewKind quality`。
+- reviewer 必须额外传 `-ReviewForTaskId`、当前实现者的 `-ReviewForRunId`，以及 `-ReviewKind spec` 或 `-ReviewKind quality`。
 - worker 报告必须使用 `Status / Role / Summary / Changed Files / Verification / Findings / Final Result / Risks Or Follow-ups`，并且 `Status` 与 `Final Result` 必须一致。
 - 单次运行使用 `verify_delegate_run` 或 `verify_delegate_artifacts` 验证；整条工作流使用 `verify_delegate_workflow` 验证。
 - implementer workflow 必须有 accepted `spec` reviewer、accepted `quality` reviewer 和 accepted `final-verifier`；非 dry-run 的 `DONE` 报告必须覆盖所有 `-Tests` 命令和结果；并行 implementer 的 `-Scope` 不能重叠。
 
-插件声明 `./hooks/hooks.json`。宿主启用 Codex hooks 后，`SessionStart` 注入完整契约，`UserPromptSubmit` 遇到触发词时再次注入，`PreToolUse` 拦截直接 `claude`、主线程直接 `delegate_to_claude.*`、缺少 `CODEX_CLAUDE_CHILD_THREAD=1`、缺少 `-TaskFile`、缺少 workflow metadata、缺少 `-SessionKey`、旧式 `-Task`、旧式 `-Mode`、reviewer 缺少 review metadata、以及并行写任务无 `-Scope`。
+Codex 从插件约定目录自动发现 `./hooks/hooks.json`；`plugin.json` 不重复声明 hooks 字段。宿主启用 Codex hooks 后，`SessionStart` 注入精简路由契约，`UserPromptSubmit` 遇到触发词时再次注入，`PreToolUse` 拦截直接 `claude`、主线程直接 `delegate_to_claude.*`、缺少 `CODEX_CLAUDE_CHILD_THREAD=1`、缺少 `-TaskFile`、缺少 workflow metadata、缺少 `-SessionKey`、旧式 `-Task`、旧式 `-Mode`、reviewer 缺少 review metadata、以及并行写任务无 `-Scope`。
 
 ## 分发源
 
@@ -325,13 +325,13 @@ export CODEX_CLAUDE_CHILD_THREAD=1
 reviewer 任务必须额外传：
 
 ```text
--Role reviewer -ReviewForTaskId <implementer-task-id> -ReviewKind spec
+-Role reviewer -ReviewForTaskId <implementer-task-id> -ReviewForRunId <current-implementer-run-id> -ReviewKind spec
 ```
 
 或：
 
 ```text
--Role reviewer -ReviewForTaskId <implementer-task-id> -ReviewKind quality
+-Role reviewer -ReviewForTaskId <implementer-task-id> -ReviewForRunId <current-implementer-run-id> -ReviewKind quality
 ```
 
 并行任务按场景使用：

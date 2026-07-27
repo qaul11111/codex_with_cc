@@ -80,6 +80,7 @@ def run_delegate(task_file: Path, artifact_root: Path) -> subprocess.CompletedPr
             "task-contract",
             "-ArtifactRoot",
             str(artifact_root),
+            "-TrustedLocalFallback",
             "-DryRun",
         ],
         cwd=REPO,
@@ -99,7 +100,8 @@ def test_contract_json_is_single_source_for_runtime_constants() -> None:
     assert contract["childThread"]["markerValue"] == "1"
     assert contract["spawn"]["model"] == ""
     assert contract["spawn"]["modelPolicy"] == "inherit_parent"
-    assert contract["spawn"]["reasoningEffort"] == "medium"
+    assert contract["spawn"]["reasoningEffort"] == ""
+    assert contract["spawn"]["reasoningEffortPolicy"] == "inherit_parent"
     assert contract["spawn"]["forkContext"] is False
     assert "delegateEntrypointPatterns" in contract
     assert contract["delegateEntrypointPattern"] in contract["delegateEntrypointPatterns"]

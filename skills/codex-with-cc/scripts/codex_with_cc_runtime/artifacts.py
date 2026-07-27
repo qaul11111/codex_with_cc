@@ -10,7 +10,7 @@ from .common import ARTIFACT_SCHEMA_VERSION, CHILD_MARKER_NAME, INVOCATION_CONTR
 from .io_utils import load_json, write_json
 from .paths import project_artifact_root, user_artifact_root
 from .reports import parse_report_final_result, parse_report_role, parse_report_status, path_has_required_report_headings, report_section
-from .workflow import REQUIRED_IMPLEMENTER_REVIEWS, workflow_path
+from .workflow import REQUIRED_IMPLEMENTER_REVIEWS, current_final_verifier, workflow_path
 
 
 
@@ -89,6 +89,8 @@ def verify_artifacts(run_id: str, artifact_root_value: str | None) -> dict[str, 
     if report_role == "reviewer":
         if not str(config.get("reviewForTaskId") or "").strip():
             raise DelegateError("Reviewer delegate config is missing reviewForTaskId.")
+        if not str(config.get("reviewForRunId") or "").strip():
+            raise DelegateError("Reviewer delegate config is missing reviewForRunId.")
         if str(config.get("reviewKind") or "") not in REQUIRED_IMPLEMENTER_REVIEWS:
             raise DelegateError(f"Reviewer delegate config has invalid reviewKind: {config.get('reviewKind')}")
     for prop in ("workflowId", "taskId", "role"):
@@ -238,6 +240,12 @@ def run_verify_workflow(ns: argparse.Namespace) -> int:
     enforce_workflow_final_verifier_gate(workflow)
     enforce_declared_tests_are_reported(workflow, verified_runs)
     enforce_parallel_implementer_scope(workflow, verified_runs)
+    acceptance = workflow.get("finalAcceptance") if isinstance(workflow.get("finalAcceptance"), dict) else {}
+    if acceptance.get("status") != "accepted":
+        raise DelegateError(
+            f"Workflow acceptance gate failed: status={acceptance.get('status') or 'missing'}. "
+            f"Details: {acceptance}"
+        )
     print(f"Workflow verification passed for WorkflowId: {ns.workflow_id}")
     return 0
 
@@ -270,10 +278,18 @@ def enforce_workflow_review_gates(workflow: dict[str, Any]) -> None:
             for kind in REQUIRED_IMPLEMENTER_REVIEWS
             if isinstance(reviews.get(kind), dict) and reviews[kind].get("reviewDecision") != "accepted"
         ]
+        stale = [
+            kind
+            for kind in REQUIRED_IMPLEMENTER_REVIEWS
+            if isinstance(reviews.get(kind), dict)
+            and str(reviews[kind].get("reviewedRunId") or "") != str(task.get("latestRunId") or "")
+        ]
         if missing:
             problems.append(f"implementer task {task_id} is missing {', '.join(missing)} review")
         if rejected:
             problems.append(f"implementer task {task_id} has non-accepted {', '.join(rejected)} review")
+        if stale:
+            problems.append(f"implementer task {task_id} has stale {', '.join(stale)} review")
     if problems:
         raise DelegateError("Workflow review gates failed: " + "; ".join(problems))
 
@@ -282,18 +298,11 @@ def enforce_workflow_final_verifier_gate(workflow: dict[str, Any]) -> None:
     tasks = workflow.get("tasks") if isinstance(workflow.get("tasks"), dict) else {}
     if not any(isinstance(task, dict) and task.get("role") == "implementer" for task in tasks.values()):
         return
-    accepted = [
-        task_id
-        for task_id, task in tasks.items()
-        if isinstance(task, dict)
-        and task.get("role") == "final-verifier"
-        and task.get("status") == "completed"
-        and task.get("lastReportStatus") == "DONE"
-        and task.get("lastReportFinalResult") == "DONE"
-        and task.get("reviewDecision") == "accepted"
-    ]
-    if not accepted:
-        raise DelegateError("Workflow final-verifier gate failed: implementer workflows require an accepted final-verifier run.")
+    if current_final_verifier(workflow) is None:
+        raise DelegateError(
+            "Workflow final-verifier gate failed: implementer workflows require an accepted final-verifier run "
+            "covering the current implementer and review runs."
+        )
 
 
 def enforce_declared_tests_are_reported(workflow: dict[str, Any], verified_runs: dict[str, dict[str, Any]]) -> None:

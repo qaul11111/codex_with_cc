@@ -23,6 +23,83 @@ MODEL_COSTS = {
     "default": {"prompt": 0.50, "completion": 1.50}
 }
 
+
+def token_counts(usage: dict[str, Any]) -> dict[str, int]:
+    prompt = int(usage.get("prompt_tokens", usage.get("input_tokens", usage.get("inputTokens", 0))) or 0)
+    completion = int(usage.get("completion_tokens", usage.get("output_tokens", usage.get("outputTokens", 0))) or 0)
+    cache_read = int(usage.get("cache_read_input_tokens", usage.get("cacheReadInputTokens", 0)) or 0)
+    cache_create = int(usage.get("cache_creation_input_tokens", usage.get("cacheCreationInputTokens", 0)) or 0)
+    reasoning_details = usage.get("completion_tokens_details") if isinstance(usage.get("completion_tokens_details"), dict) else {}
+    reasoning = int(reasoning_details.get("reasoning_tokens", usage.get("reasoningTokens", 0)) or 0)
+    total = int(usage.get("total_tokens", usage.get("totalTokens", 0)) or 0)
+    if not total:
+        total = prompt + completion + cache_read + cache_create
+    return {
+        "prompt": prompt,
+        "completion": completion,
+        "cacheRead": cache_read,
+        "cacheCreation": cache_create,
+        "reasoning": reasoning,
+        "total": total,
+    }
+
+
+def stream_metrics(stream_path: Path) -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "tokens": {"prompt": 0, "completion": 0, "cacheRead": 0, "cacheCreation": 0, "reasoning": 0, "total": 0},
+        "model": "unknown",
+        "reportedCostUsd": None,
+        "mcpInvocations": 0,
+        "genericSearchViolations": 0,
+    }
+    if not stream_path.exists():
+        return metrics
+    try:
+        for line in stream_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            message = record.get("message") if isinstance(record.get("message"), dict) else {}
+            usage = record.get("usage") if isinstance(record.get("usage"), dict) else message.get("usage")
+            if isinstance(usage, dict):
+                metrics["tokens"] = token_counts(usage)
+            if message.get("model"):
+                metrics["model"] = str(message["model"])
+            elif record.get("model"):
+                metrics["model"] = str(record["model"])
+            reported_cost = record.get("total_cost_usd", record.get("cost_usd"))
+            if reported_cost is not None:
+                metrics["reportedCostUsd"] = float(reported_cost)
+            model_usage = record.get("modelUsage") if isinstance(record.get("modelUsage"), dict) else {}
+            if model_usage:
+                aggregate = {"prompt": 0, "completion": 0, "cacheRead": 0, "cacheCreation": 0, "reasoning": 0, "total": 0}
+                for model_name, model_data in model_usage.items():
+                    if not isinstance(model_data, dict):
+                        continue
+                    metrics["model"] = str(model_name)
+                    counts = token_counts(model_data)
+                    for key in aggregate:
+                        aggregate[key] += counts[key]
+                metrics["tokens"] = aggregate
+            line_lower = line.lower()
+            if "minimax" in line_lower or "coding-plan-search" in line_lower:
+                metrics["mcpInvocations"] += 1
+            elif any(name in line_lower for name in ("search_web", "web_search", "google_search", "read_url", "read_browser_page")):
+                metrics["genericSearchViolations"] += 1
+    except Exception:
+        pass
+    return metrics
+
+
+def estimated_cost_usd(model: str, tokens: dict[str, int]) -> float:
+    cost_meta = MODEL_COSTS.get(model.lower()) or MODEL_COSTS["default"]
+    for key, value in MODEL_COSTS.items():
+        if key in model.lower():
+            cost_meta = value
+            break
+    return (tokens["prompt"] * cost_meta["prompt"] + tokens["completion"] * cost_meta["completion"]) / 1_000_000.0
+
+
 def resolve_all_artifact_roots(explicit_root: str | None = None) -> list[Path]:
     roots = []
     if explicit_root:
@@ -69,40 +146,27 @@ def list_workflows(artifact_root_value: str | None = None) -> list[dict[str, Any
                 max_end = None
                 
                 for run_id, run_meta in runs.items():
-                    # Parse stream for usage
                     stream_path = root / f"stream_{run_id}.jsonl"
-                    usage = {}
-                    model = "unknown"
-                    if stream_path.exists():
+                    metrics = stream_metrics(stream_path)
+                    status_path = root / f"status_{run_id}.json"
+                    reported_cost = metrics["reportedCostUsd"]
+                    if status_path.exists():
                         try:
-                            # Stream file usually has 1 line or a few lines
-                            for line in stream_path.read_text(encoding="utf-8").splitlines():
-                                if not line.strip():
-                                    continue
-                                line_data = json.loads(line)
-                                if "usage" in line_data:
-                                    usage = line_data["usage"]
-                                if "model" in line_data:
-                                    model = line_data["model"]
+                            status_data = load_json(status_path)
+                            if status_data.get("usage"):
+                                metrics["tokens"] = token_counts(status_data["usage"])
+                            if status_data.get("models"):
+                                metrics["model"] = str(status_data["models"][-1])
+                            if status_data.get("totalCostUsd") is not None:
+                                reported_cost = float(status_data["totalCostUsd"])
                         except Exception:
                             pass
-                    
-                    if not usage and isinstance(run_meta, dict):
-                        # Try to get output or estimate
-                        pass
-                        
-                    if usage:
-                        prompt_tokens = usage.get("prompt_tokens", 0)
-                        completion_tokens = usage.get("completion_tokens", 0)
-                        total_tokens += usage.get("total_tokens", prompt_tokens + completion_tokens)
-                        
-                        # Calculate cost
-                        cost_meta = MODEL_COSTS.get(model.lower()) or MODEL_COSTS.get("default")
-                        for k, v in MODEL_COSTS.items():
-                            if k in model.lower():
-                                cost_meta = v
-                                break
-                        total_cost_usd += (prompt_tokens * cost_meta["prompt"] + completion_tokens * cost_meta["completion"]) / 1_000_000.0
+                    total_tokens += metrics["tokens"]["total"]
+                    total_cost_usd += (
+                        reported_cost
+                        if reported_cost is not None
+                        else estimated_cost_usd(metrics["model"], metrics["tokens"])
+                    )
 
                 workflows.append({
                     "workflowId": wf_id,
@@ -151,6 +215,9 @@ def get_workflow_details(workflow_id: str, artifact_root_value: str | None = Non
                     attempt_count = 1
                     retry_count = 0
                     attempts = []
+                    reported_cost_usd = None
+                    reported_usage: dict[str, Any] = {}
+                    reported_models: list[str] = []
                     if status_path.exists():
                         try:
                             status_data = load_json(status_path)
@@ -158,6 +225,9 @@ def get_workflow_details(workflow_id: str, artifact_root_value: str | None = Non
                             attempt_count = status_data.get("attemptCount", 1)
                             retry_count = status_data.get("retryCount", 0)
                             attempts = status_data.get("attempts", [])
+                            reported_cost_usd = status_data.get("totalCostUsd")
+                            reported_usage = status_data.get("usage") if isinstance(status_data.get("usage"), dict) else {}
+                            reported_models = [str(item) for item in status_data.get("models") or []]
                             # Supplement running status with PID check
                             if status_data.get("status") == "running" and attempts:
                                 final_att = attempts[-1]
@@ -191,49 +261,23 @@ def get_workflow_details(workflow_id: str, artifact_root_value: str | None = Non
 
                     # 3. Parse Stream JSONL
                     stream_path = Path(run_meta.get("rawStreamPath") or (root / f"stream_{run_id}.jsonl"))
-                    tokens = {"prompt": 0, "completion": 0, "reasoning": 0, "total": 0}
-                    model = "unknown"
-                    mcp_invocations = 0
-                    generic_search_violations = 0
-                    
-                    if stream_path.exists():
-                        try:
-                            for line in stream_path.read_text(encoding="utf-8").splitlines():
-                                if not line.strip():
-                                    continue
-                                line_data = json.loads(line)
-                                if "usage" in line_data:
-                                    usage = line_data["usage"]
-                                    tokens["prompt"] += usage.get("prompt_tokens", 0)
-                                    tokens["completion"] += usage.get("completion_tokens", 0)
-                                    tokens["total"] += usage.get("total_tokens", tokens["prompt"] + tokens["completion"])
-                                    if "completion_tokens_details" in usage:
-                                        tokens["reasoning"] += usage["completion_tokens_details"].get("reasoning_tokens", 0)
-                                if "model" in line_data:
-                                    model = line_data["model"]
-                                # Search for tool calls / MCP invocations in the stream lines
-                                # (e.g. if the CLI logged its tool uses inside JSONL events)
-                                line_str = line.lower()
-                                if "minimax" in line_str or "coding-plan-search" in line_str:
-                                    mcp_invocations += 1
-                                elif any(x in line_str for x in ("search_web", "web_search", "google_search", "read_url", "read_browser_page")):
-                                    generic_search_violations += 1
-                        except Exception:
-                            pass
-                            
-                    # Cost calculation
-                    cost_meta = MODEL_COSTS.get(model.lower()) or MODEL_COSTS.get("default")
-                    for k, v in MODEL_COSTS.items():
-                        if k in model.lower():
-                            cost_meta = v
-                            break
-                    cost_usd = (tokens["prompt"] * cost_meta["prompt"] + tokens["completion"] * cost_meta["completion"]) / 1_000_000.0
+                    metrics = stream_metrics(stream_path)
+                    tokens = token_counts(reported_usage) if reported_usage else metrics["tokens"]
+                    model = reported_models[-1] if reported_models else metrics["model"]
+                    stream_reported_cost = metrics["reportedCostUsd"]
+                    effective_reported_cost = reported_cost_usd if reported_cost_usd is not None else stream_reported_cost
+                    cost_usd = (
+                        float(effective_reported_cost)
+                        if effective_reported_cost is not None
+                        else estimated_cost_usd(model, tokens)
+                    )
                     
                     run_meta["tokens"] = tokens
                     run_meta["model"] = model
                     run_meta["costUsd"] = cost_usd
-                    run_meta["mcpInvocations"] = mcp_invocations
-                    run_meta["genericSearchViolations"] = generic_search_violations
+                    run_meta["costSource"] = "reported" if effective_reported_cost is not None else "estimated"
+                    run_meta["mcpInvocations"] = metrics["mcpInvocations"]
+                    run_meta["genericSearchViolations"] = metrics["genericSearchViolations"]
 
                     # 4. Parse MD Report
                     output_path = Path(run_meta.get("outputPath") or (root / f"claude_{run_id}.md"))

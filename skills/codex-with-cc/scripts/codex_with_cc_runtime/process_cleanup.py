@@ -187,20 +187,44 @@ def cleanup_child_processes() -> None:
         _CLEANING_UP = False
 
 
+def terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    with _LOCK:
+        tracked = next((item for item in _TRACKED if item.process is process), None)
+    if tracked is not None:
+        tracked.terminate_tree()
+        return
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        _run_untracked(["taskkill", "/PID", str(process.pid), "/T", "/F"])
+    else:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+        with contextlib.suppress(Exception):
+            process.wait(timeout=5)
+        if process.poll() is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+
+
 def install_child_process_cleanup() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
     subprocess.Popen = _tracked_popen
     atexit.register(cleanup_child_processes)
-    with contextlib.suppress(ValueError):
-        previous = signal.getsignal(signal.SIGTERM)
+    for signal_name in ("SIGTERM", "SIGINT", "SIGHUP"):
+        signum = getattr(signal, signal_name, None)
+        if signum is None:
+            continue
+        with contextlib.suppress(ValueError):
+            previous = signal.getsignal(signum)
 
-        def handle_sigterm(signum: int, frame: Any) -> None:
-            cleanup_child_processes()
-            if callable(previous):
-                previous(signum, frame)
-            raise SystemExit(128 + signum)
+            def handle_signal(received: int, frame: Any, previous_handler: Any = previous) -> None:
+                cleanup_child_processes()
+                if callable(previous_handler):
+                    previous_handler(received, frame)
+                raise SystemExit(128 + received)
 
-        signal.signal(signal.SIGTERM, handle_sigterm)
+            signal.signal(signum, handle_signal)
     _INSTALLED = True

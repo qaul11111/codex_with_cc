@@ -44,8 +44,7 @@ def reset_smoke_project() -> tuple[Path, Path, Path]:
 
 
 def hooks_config(plugin_root: Path) -> dict:
-    manifest = json.loads((plugin_root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
-    hooks_path = plugin_root / manifest["hooks"].removeprefix("./")
+    hooks_path = plugin_root / "hooks" / "hooks.json"
     return json.loads(hooks_path.read_text(encoding="utf-8"))
 
 
@@ -93,6 +92,7 @@ def delegate_command(workflow_root: Path, task_file: Path, artifact_root: Path) 
             "PrimaryReuse",
             "-SessionKey",
             "smoke",
+            "-TrustedLocalFallback",
             "-DryRun",
         ]
         hook_text = (
@@ -101,7 +101,7 @@ def delegate_command(workflow_root: Path, task_file: Path, artifact_root: Path) 
             f'-TaskFile "{task_file.as_posix()}" '
             "-WorkflowId wf-smoke -TaskId task-smoke -Role researcher -Scope AGENTS.md "
             f'-ArtifactRoot "{artifact_root.as_posix()}" '
-            "-SessionMode PrimaryReuse -SessionKey smoke -DryRun"
+            "-SessionMode PrimaryReuse -SessionKey smoke -TrustedLocalFallback -DryRun"
         )
         return argv, hook_text
 
@@ -124,6 +124,7 @@ def delegate_command(workflow_root: Path, task_file: Path, artifact_root: Path) 
         "PrimaryReuse",
         "-SessionKey",
         "smoke",
+        "-TrustedLocalFallback",
         "-DryRun",
     ]
     hook_text = (
@@ -132,7 +133,7 @@ def delegate_command(workflow_root: Path, task_file: Path, artifact_root: Path) 
         f'-TaskFile "{task_file.as_posix()}" '
         "-WorkflowId wf-smoke -TaskId task-smoke -Role researcher -Scope AGENTS.md "
         f'-ArtifactRoot "{artifact_root.as_posix()}" '
-        "-SessionMode PrimaryReuse -SessionKey smoke -DryRun"
+        "-SessionMode PrimaryReuse -SessionKey smoke -TrustedLocalFallback -DryRun"
     )
     return argv, hook_text
 
@@ -149,9 +150,9 @@ def test_build_project_smoke_runs_hook_gate_and_delegate_dry_run() -> None:
         {"hook_event_name": "SessionStart", "source": "startup"},
     )
     session_context = session_output["hookSpecificOutput"]["additionalContext"]
-    assert "<EXTREMELY_IMPORTANT>" in session_context
-    assert "Below is the full content of your 'codex-with-cc' skill" in session_context
-    assert "## Core Contract" in session_context
+    assert len(session_context) < 5000
+    assert "Below is the full content" not in session_context
+    assert "record every spawned agent id" in session_context
 
     prompt_output = run_hook(
         plugin_root,

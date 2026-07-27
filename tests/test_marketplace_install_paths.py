@@ -90,6 +90,7 @@ def test_marketplace_install_uses_project_cwd_for_default_paths() -> None:
             "researcher",
             "-SessionKey",
             "marketplace-paths",
+            "-TrustedLocalFallback",
             "-DryRun",
             cwd=project_root,
             env=env,

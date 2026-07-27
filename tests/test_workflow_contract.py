@@ -154,6 +154,7 @@ def test_delegate_dry_run_writes_workflow_artifacts_and_verifies_them() -> None:
             str(artifact_root),
             "-SessionKey",
             "workflow-contract",
+            "-TrustedLocalFallback",
             "-DryRun",
             cwd=REPO,
             env=env,
@@ -182,20 +183,21 @@ def test_delegate_dry_run_writes_workflow_artifacts_and_verifies_them() -> None:
         assert workflow["tasks"]["task-contract"]["role"] == "researcher"
         assert workflow["tasks"]["task-contract"]["lastReportStatus"] == "DONE"
         assert workflow["tasks"]["task-contract"]["lastReportFinalResult"] == "DONE"
-        assert workflow["tasks"]["task-contract"]["reviewDecision"] == "accepted"
+        assert workflow["tasks"]["task-contract"]["reviewDecision"] == "dry-run"
         assert workflow["tasks"]["task-contract"]["dependsOn"] == ["task-prereq"]
         assert workflow["runs"][run_id]["taskId"] == "task-contract"
         assert workflow["runs"][run_id]["reportStatus"] == "DONE"
         assert workflow["runs"][run_id]["reportFinalResult"] == "DONE"
         assert workflow["runs"][run_id]["reportRole"] == "researcher"
-        assert workflow["runs"][run_id]["reviewDecision"] == "accepted"
+        assert workflow["runs"][run_id]["reviewDecision"] == "dry-run"
         assert workflow["runs"][run_id]["runnerType"] == "claude_code"
 
         verify_run = run_python(VERIFY_RUN, "-RunId", run_id, "-ArtifactRoot", str(artifact_root), cwd=REPO, env=env)
         verify_workflow = run_python(VERIFY_WORKFLOW, "-WorkflowId", "wf-contract", "-ArtifactRoot", str(artifact_root), cwd=REPO, env=env)
 
         assert verify_run.returncode == 0, verify_run.stdout + verify_run.stderr
-        assert verify_workflow.returncode == 0, verify_workflow.stdout + verify_workflow.stderr
+        assert verify_workflow.returncode != 0
+        assert "dry-run" in (verify_workflow.stdout + verify_workflow.stderr).lower()
 
 
 def test_hook_gate_requires_workflow_payload_fields_and_write_scope_for_parallel() -> None:

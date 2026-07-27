@@ -8,21 +8,25 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Thread
 from typing import Any
 
-from .claude_cli import new_claude_cli_args, retry_decision, update_stream_capture, failure_summary
+from .claude_cli import failure_summary, new_claude_cli_args, retry_decision, role_disallowed_tools, role_effort, update_stream_capture
 from .common import ARTIFACT_SCHEMA_VERSION, CHILD_MARKER_NAME, CHILD_MARKER_VALUE, INVOCATION_CONTRACT, DelegateError, now_iso
 from .io_utils import read_text, test_path_writable, write_json, write_text
 from .locks import FileLock, acquire_file_lock
 from .paths import project_artifact_root, repo_root, user_artifact_root, workflow_relative_path, workflow_root
+from .process_cleanup import terminate_process_tree
 from .prompts import build_prompt
 from .reports import build_report_repair_prompt, get_output_resolution, path_has_required_report_headings
-from .sessions import SessionLease, acquire_session_lease, effective_session_key, normalize_delegate_list, release_session_lease, reset_session_lease_for_fresh_session, safe_session_key, task_fingerprint
+from .sessions import SessionLease, acquire_session_lease, default_execution_timeout_seconds, default_session_mode, effective_session_key, normalize_delegate_list, release_session_lease, renew_session_lease, reset_session_lease_for_fresh_session, safe_session_key, task_fingerprint
 from .task_contract import validate_task_file_contract
-from .workflow import normalize_role, safe_task_id, update_workflow_record, workflow_path
+from .workflow import capture_final_verifier_snapshot, normalize_role, safe_task_id, update_workflow_record, workflow_path
 
 
 RUNNER_TYPE = "claude_code"
@@ -85,6 +89,57 @@ DONE
 Risks Or Follow-ups
 - Inspect the generated prompt before running without -DryRun if needed: {prompt_path}
 """
+
+
+def timeout_failure_report(role: str, timeout_kind: str, timeout_seconds: int) -> str:
+    label = "silent output" if timeout_kind == "silent" else "total execution"
+    return f"""Status
+FAIL
+
+Role
+{role}
+
+Summary
+Claude Code exceeded the configured {label} timeout.
+
+Changed Files
+None
+
+Verification
+- delegate process tree was terminated after {timeout_seconds} seconds
+
+Findings
+- Timeout kind: {timeout_kind}
+- The worker did not complete a trustworthy structured result before the deadline.
+
+Final Result
+FAIL
+
+Risks Or Follow-ups
+- Inspect the raw stream and trace before retrying with a larger explicit timeout.
+"""
+
+
+def read_stdout_lines(stream: Any, output: Queue[str | None]) -> None:
+    try:
+        for line in stream:
+            output.put(line)
+    finally:
+        output.put(None)
+
+
+def write_stdin_text(stream: Any, text: str, errors: Queue[str | None]) -> None:
+    try:
+        stream.write(text)
+        if not text.endswith("\n"):
+            stream.write("\n")
+        stream.flush()
+        errors.put(None)
+    except Exception as exc:
+        errors.put(str(exc))
+    finally:
+        with contextlib.suppress(Exception):
+            stream.close()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -266,8 +321,10 @@ def run_delegate(ns: argparse.Namespace) -> int:
     if not task_text.strip():
         raise DelegateError("Task text cannot be empty.")
     validate_task_file_contract(task_text)
-    if str(ns.role).lower() == "reviewer" and (not ns.review_for_task_id or not ns.review_kind):
-        raise DelegateError("Reviewer runs must pass -ReviewForTaskId and -ReviewKind.")
+    if str(ns.role).lower() == "reviewer" and (
+        not ns.review_for_task_id or not ns.review_for_run_id or not ns.review_kind
+    ):
+        raise DelegateError("Reviewer runs must pass -ReviewForTaskId, -ReviewForRunId, and -ReviewKind.")
 
     root = repo_root()
     rel = workflow_relative_path()
@@ -297,7 +354,18 @@ def run_delegate(ns: argparse.Namespace) -> int:
     session_state_lock_path = session_pools_root / f"{safe_key}.lock"
     task_id = safe_task_id(ns.task_id)
     role = normalize_role(ns.role)
+    ns.session_mode = ns.session_mode or default_session_mode(role)
+    execution_timeout_seconds = int(ns.execution_timeout_seconds or default_execution_timeout_seconds(role))
     mode = role
+    host_codex_thread_id = os.environ.get("CODEX_THREAD_ID") or None
+    trusted_local_fallback = bool(ns.trusted_local_fallback)
+    if not trusted_local_fallback and not host_codex_thread_id:
+        raise DelegateError(
+            "CODEX_THREAD_ID is required for Codex child-agent runs. "
+            "Use -TrustedLocalFallback only for the documented local terminal fallback."
+        )
+    codex_thread_id = None if trusted_local_fallback else host_codex_thread_id
+    verifier_snapshot = capture_final_verifier_snapshot(artifact_root, workflow_id) if role == "final-verifier" else None
     effective_name = ns.name if ns.name else f"{ns.name_prefix}-{run_id}"
     fingerprint = task_fingerprint(task_text, scope, tests, mode)
 
@@ -341,7 +409,13 @@ def run_delegate(ns: argparse.Namespace) -> int:
         "lockPath": str(lock_path),
         "taskFile": str(task_file.resolve()),
         "reviewForTaskId": safe_task_id(ns.review_for_task_id) if ns.review_for_task_id else None,
+        "reviewForRunId": ns.review_for_run_id,
         "reviewKind": ns.review_kind,
+        "dryRun": bool(ns.dry_run),
+        "codexThreadId": codex_thread_id,
+        "hostCodexThreadId": host_codex_thread_id,
+        "trustedLocalFallback": trusted_local_fallback,
+        "verifiedImplementerRuns": verifier_snapshot,
         "maxBudgetUsd": str(ns.max_budget_usd) if ns.max_budget_usd not in (None, "") else None,
         "bypassPermissions": bool(ns.bypass_permissions),
         "allowParallel": bool(ns.allow_parallel),
@@ -350,6 +424,12 @@ def run_delegate(ns: argparse.Namespace) -> int:
         "attemptCount": 0,
         "retryCount": 0,
         "maxRetryCount": int(ns.max_retry_count),
+        "claudeEffort": role_effort(role),
+        "claudeDisallowedTools": role_disallowed_tools(role).split(","),
+        "structuredOutput": True,
+        "executionTimeoutSeconds": execution_timeout_seconds,
+        "silentTimeoutSeconds": int(ns.silent_timeout_seconds),
+        "heartbeatSeconds": int(ns.heartbeat_seconds),
     }
     status: dict[str, Any] = {
         "artifactSchema": ARTIFACT_SCHEMA_VERSION,
@@ -361,6 +441,8 @@ def run_delegate(ns: argparse.Namespace) -> int:
         "taskId": task_id,
         "role": role,
         "runnerType": RUNNER_TYPE,
+        "dryRun": bool(ns.dry_run),
+        "codexThreadId": codex_thread_id,
         "status": "starting",
         "pid": os.getpid(),
         "artifactRoot": str(artifact_root),
@@ -375,6 +457,9 @@ def run_delegate(ns: argparse.Namespace) -> int:
         "attemptCount": 0,
         "retryCount": 0,
         "maxRetryCount": int(ns.max_retry_count),
+        "executionTimeoutSeconds": execution_timeout_seconds,
+        "silentTimeoutSeconds": int(ns.silent_timeout_seconds),
+        "heartbeatSeconds": int(ns.heartbeat_seconds),
         "attempts": [],
     }
     prompt = build_prompt(
@@ -390,6 +475,7 @@ def run_delegate(ns: argparse.Namespace) -> int:
         role=role,
         review_for_task_id=safe_task_id(ns.review_for_task_id) if ns.review_for_task_id else None,
         review_kind=ns.review_kind,
+        review_for_run_id=ns.review_for_run_id,
     )
     write_text(prompt_path, prompt)
     write_json(config_path, config)
@@ -489,6 +575,7 @@ def run_delegate(ns: argparse.Namespace) -> int:
         failure_summary_text = ""
         raw_stream_path.parent.mkdir(parents=True, exist_ok=True)
         trace_path.parent.mkdir(parents=True, exist_ok=True)
+        execution_started_at = time.monotonic()
         with raw_stream_path.open("w", encoding="utf-8") as raw_handle, trace_path.open("w", encoding="utf-8") as trace_handle:
             while attempt < max_attempts:
                 attempt += 1
@@ -518,6 +605,7 @@ def run_delegate(ns: argparse.Namespace) -> int:
                 claude_args = new_claude_cli_args(
                     ns.model,
                     effective_name,
+                    role,
                     lease.session_id,
                     lease.resume,
                     str(ns.max_budget_usd) if ns.max_budget_usd not in (None, "") else None,
@@ -554,32 +642,112 @@ def run_delegate(ns: argparse.Namespace) -> int:
                 execution_started = True
                 assert process.stdout is not None
                 assert process.stdin is not None
-                process.stdin.write(prompt_text)
-                if not prompt_text.endswith("\n"):
-                    process.stdin.write("\n")
-                process.stdin.close()
-                for line in process.stdout:
-                    line_text = line.rstrip("\r\n")
-                    if not line_text.strip():
-                        continue
-                    attempt_raw_lines.append(line_text)
-                    raw_handle.write(line_text + "\n")
-                    raw_handle.flush()
+                line_queue: Queue[str | None] = Queue()
+                stdin_errors: Queue[str | None] = Queue()
+                reader = Thread(target=read_stdout_lines, args=(process.stdout, line_queue), daemon=True)
+                writer = Thread(target=write_stdin_text, args=(process.stdin, prompt_text, stdin_errors), daemon=True)
+                reader.start()
+                writer.start()
+                attempt_started = time.monotonic()
+                last_output = attempt_started
+                last_heartbeat = attempt_started
+                timeout_kind: str | None = None
+                timeout_seconds = 0
+                stdout_closed = False
+                while True:
                     try:
-                        record = json.loads(line_text)
-                        trace_lines = update_stream_capture(record, capture_state)
-                    except json.JSONDecodeError:
-                        trace_lines = ["[raw] non-json output line"]
-                    for trace_line in trace_lines:
-                        trace_handle.write(trace_line + "\n")
+                        line = line_queue.get(timeout=0.25)
+                    except Empty:
+                        line = ""
+                    if line is None:
+                        stdout_closed = True
+                        line = ""
+                    if line:
+                        line_text = line.rstrip("\r\n")
+                        if line_text.strip():
+                            attempt_raw_lines.append(line_text)
+                            raw_handle.write(line_text + "\n")
+                            raw_handle.flush()
+                            try:
+                                record = json.loads(line_text)
+                                trace_lines = update_stream_capture(record, capture_state)
+                            except json.JSONDecodeError:
+                                trace_lines = ["[raw] non-json output line"]
+                            for trace_line in trace_lines:
+                                trace_handle.write(trace_line + "\n")
+                            trace_handle.flush()
+                            status["linesWritten"] = int(status.get("linesWritten", 0)) + 1
+                            status["lastOutputAt"] = now_iso()
+                            write_json(status_path, status)
+                            last_output = time.monotonic()
+
+                    current = time.monotonic()
+                    if current - execution_started_at >= execution_timeout_seconds:
+                        timeout_kind = "execution"
+                        timeout_seconds = execution_timeout_seconds
+                    elif current - last_output >= int(ns.silent_timeout_seconds):
+                        timeout_kind = "silent"
+                        timeout_seconds = int(ns.silent_timeout_seconds)
+                    if timeout_kind:
+                        terminate_process_tree(process)
+                        break
+
+                    if current - last_heartbeat >= int(ns.heartbeat_seconds):
+                        renewed = renew_session_lease(
+                            session_state_path,
+                            session_state_lock_path,
+                            key,
+                            lease,
+                            run_id,
+                        )
+                        status["lastHeartbeatAt"] = now_iso()
+                        status["heartbeatCount"] = int(status.get("heartbeatCount", 0)) + 1
+                        status["leaseRenewed"] = renewed
+                        write_json(status_path, status)
+                        trace_handle.write(f"[heartbeat] leaseRenewed={renewed}\n")
+                        trace_handle.flush()
+                        last_heartbeat = current
+
+                    if stdout_closed and process.poll() is not None:
+                        break
+
+                reader.join(timeout=1)
+                writer.join(timeout=1)
+                if process.poll() is None:
+                    terminate_process_tree(process)
+                    if not timeout_kind:
+                        timeout_kind = "execution"
+                        timeout_seconds = execution_timeout_seconds
+                exit_code = process.wait(timeout=1)
+                if not stdin_errors.empty():
+                    stdin_error = stdin_errors.get_nowait()
+                    if stdin_error:
+                        attempt_raw_lines.append(f"stdin write failed: {stdin_error}")
+                        trace_handle.write("[stdin] write failed\n")
+                        trace_handle.flush()
+                if timeout_kind:
+                    exit_code = 124
+                    failure_disposition = "NEED_HUMAN_INTERVENTION"
+                    failure_summary_text = (
+                        f"CLAUDE_{timeout_kind.upper()}_TIMEOUT: no trustworthy completion before "
+                        f"the configured {timeout_seconds}-second deadline."
+                    )
+                    attempt_raw_lines.append(failure_summary_text)
+                    attempt_record["timeoutKind"] = timeout_kind
+                    attempt_record["timeoutSeconds"] = timeout_seconds
+                    status["timeoutKind"] = timeout_kind
+                    status["timeoutSeconds"] = timeout_seconds
+                    status["failureDisposition"] = failure_disposition
+                    status["failureSummary"] = failure_summary_text
+                    config["failureDisposition"] = failure_disposition
+                    config["failureSummary"] = failure_summary_text
+                    trace_handle.write(f"[timeout] kind={timeout_kind} seconds={timeout_seconds}\n")
                     trace_handle.flush()
-                    status["linesWritten"] = int(status.get("linesWritten", 0)) + 1
-                    status["lastOutputAt"] = now_iso()
-                    write_json(status_path, status)
-                exit_code = process.wait()
-                final_text = str(capture_state.get("finalText") or "")
-                if not final_text.strip() and capture_state["assistantTexts"]:
-                    final_text = str(capture_state["assistantTexts"][-1]).strip()
+                    final_text = timeout_failure_report(role, timeout_kind, timeout_seconds)
+                else:
+                    final_text = str(capture_state.get("finalText") or "")
+                    if not final_text.strip() and capture_state["assistantTexts"]:
+                        final_text = str(capture_state["assistantTexts"][-1]).strip()
                 output_file_has_report = path_has_required_report_headings(output_path)
                 captured_report = bool(capture_state["capturedFinalResultHeading"]) or output_file_has_report
                 decision = retry_decision(
@@ -598,6 +766,10 @@ def run_delegate(ns: argparse.Namespace) -> int:
                         "capturedFinalResult": captured_report,
                         "sawStaleSessionText": bool(decision["sawStaleSessionText"]),
                         "sawStreamJsonVerboseError": bool(decision["sawStreamJsonVerboseError"]),
+                        "totalCostUsd": capture_state.get("totalCostUsd"),
+                        "usage": capture_state.get("usage") or {},
+                        "modelUsage": capture_state.get("modelUsage") or {},
+                        "models": capture_state.get("models") or [],
                     }
                 )
                 if decision["shouldRetry"] and attempt < max_attempts:
@@ -728,6 +900,17 @@ Risks Or Follow-ups
         status["outputBytes"] = output_path.stat().st_size
         status["exitCode"] = exit_code
         status["retryCount"] = retry_count
+        reported_costs: list[float] = []
+        for item in status["attempts"]:
+            if item.get("totalCostUsd") in (None, ""):
+                continue
+            with contextlib.suppress(TypeError, ValueError):
+                reported_costs.append(float(item["totalCostUsd"]))
+        status["totalCostUsd"] = sum(reported_costs) if reported_costs else None
+        if status["attempts"]:
+            status["usage"] = status["attempts"][-1].get("usage") or {}
+            status["modelUsage"] = status["attempts"][-1].get("modelUsage") or {}
+            status["models"] = status["attempts"][-1].get("models") or []
         status["status"] = "completed" if delegate_succeeded and output_has_report else "failed"
         if failure_disposition:
             status["failureDisposition"] = failure_disposition
@@ -770,6 +953,10 @@ Risks Or Follow-ups
                 safe_task_id(ns.review_for_task_id) if ns.review_for_task_id else None,
                 ns.review_kind,
                 runner_type=RUNNER_TYPE,
+                review_for_run_id=ns.review_for_run_id,
+                dry_run=bool(ns.dry_run),
+                codex_thread_id=codex_thread_id,
+                verified_implementer_runs=verifier_snapshot,
             )
         release_session_lease(session_state_path, session_state_lock_path, key, lease, run_id, fingerprint)
         if delegate_lock is not None:

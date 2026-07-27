@@ -6,7 +6,18 @@ import { fileURLToPath } from "node:url";
 
 const FALLBACK_CONTRACT = {
   childThread: { markerName: "CODEX_CLAUDE_CHILD_THREAD", markerValue: "1" },
-  spawn: { model: "", modelPolicy: "inherit_parent", reasoningEffort: "medium", forkContext: false },
+  spawn: {
+    model: "",
+    modelPolicy: "inherit_parent",
+    reasoningEffort: "",
+    reasoningEffortPolicy: "inherit_parent",
+    forkContext: false,
+  },
+  provenance: {
+    hostTranscriptFields: ["transcript_path", "transcriptPath"],
+    subagentSessionMetaSignals: ["source.subagent", "thread_source=subagent", "parent_thread_id"],
+    fallbackPolicy: "child_marker",
+  },
   workerRoles: ["planner", "implementer", "researcher", "reviewer", "final-verifier"],
   triggerPatterns: [
     "child[- ]?agent",
@@ -25,17 +36,16 @@ const FALLBACK_CONTRACT = {
   ],
 };
 
-const FALLBACK_CONTEXT = [
+const ROUTING_CONTEXT = [
   "codex-with-cc platform subagent gate:",
   "- Any child-agent, subagent, child-thread, delegation, worker-execution, 子代理, 子线程, 多代理, 委派, 派工, or 执行层 request must use the codex-with-cc workflow.",
   "- Required chain: Codex main thread -> Codex spawn_agent child thread -> delegate_to_claude.* -> Claude Code CLI.",
-  "- Do not use the default Codex subagent flow, a host-provided worker shortcut, direct claude execution, or direct main-thread delegate_to_claude.* execution.",
-  "- Use the staged flow: plan task graph, dispatch bounded tasks, execute with scoped worker context, review spec compliance, review quality, then verify the workflow.",
-  "- Implementer workflows require spec review, quality review, and final-verifier acceptance.",
-  "- Child spawn metadata must inherit the main-thread model, use reasoning_effort: medium, and set fork_context: false.",
+  "- Read the codex-with-cc skill only when delegation is requested; do not inject the full contract repeatedly.",
+  "- Spawn every independent task before waiting. Wait on all active agent ids together and process whichever finishes first.",
+  "- record every spawned agent id, bind reviews to the exact implementer run, and close every agent attempt.",
+  "- Child spawn metadata inherits the main-thread model and reasoning effort; fork_context may be omitted or false.",
   "- The child must set CODEX_CLAUDE_CHILD_THREAD=1 and call delegate_to_claude.* with -TaskFile, -WorkflowId, -TaskId, -Role, and -SessionKey.",
-  "- Use validate_delegate_task.* to preflight generated TaskFiles when review metadata or -Tests are involved.",
-  "- Legacy inline -Task and -Mode delegate arguments are forbidden.",
+  "- Implementer workflows require current spec review, quality review, and final-verifier acceptance. Dry runs never count as acceptance.",
 ].join("\n");
 
 function pluginRoot() {
@@ -66,6 +76,7 @@ function mergeContract(contract) {
     ...contract,
     childThread: { ...FALLBACK_CONTRACT.childThread, ...(contract.childThread || {}) },
     spawn: { ...FALLBACK_CONTRACT.spawn, ...(contract.spawn || {}) },
+    provenance: { ...FALLBACK_CONTRACT.provenance, ...(contract.provenance || {}) },
     workerRoles: Array.isArray(contract.workerRoles) ? contract.workerRoles : FALLBACK_CONTRACT.workerRoles,
     triggerPatterns: Array.isArray(contract.triggerPatterns) ? contract.triggerPatterns : FALLBACK_CONTRACT.triggerPatterns,
     spawnToolNames: Array.isArray(contract.spawnToolNames) ? contract.spawnToolNames : FALLBACK_CONTRACT.spawnToolNames,
@@ -89,6 +100,7 @@ const CONTRACT = readContract();
 const REQUIRED_MODEL = CONTRACT.spawn.model;
 const REQUIRED_MODEL_POLICY = CONTRACT.spawn.modelPolicy || (REQUIRED_MODEL ? "fixed" : "inherit_parent");
 const REQUIRED_EFFORT = CONTRACT.spawn.reasoningEffort;
+const REQUIRED_EFFORT_POLICY = CONTRACT.spawn.reasoningEffortPolicy || (REQUIRED_EFFORT ? "fixed" : "inherit_parent");
 const REQUIRED_FORK_CONTEXT = CONTRACT.spawn.forkContext;
 const CHILD_MARKER_NAME = CONTRACT.childThread.markerName;
 const CHILD_MARKER_VALUE = CONTRACT.childThread.markerValue;
@@ -98,30 +110,7 @@ const SPAWN_TOOL_NAMES = new Set(CONTRACT.spawnToolNames.map((name) => String(na
 const DELEGATE_ENTRYPOINT_PATTERNS = CONTRACT.delegateEntrypointPatterns.map((pattern) => new RegExp(pattern, "i"));
 
 function bootstrapContext() {
-  const root = pluginRoot();
-  const skillText = readOptionalText(path.join(root, "skills", "codex-with-cc", "SKILL.md"));
-  const contractText = readOptionalText(path.join(root, "skills", "codex-with-cc", "CODEX_WITH_CC.md"));
-
-  if (!skillText.trim() || !contractText.trim()) {
-    return FALLBACK_CONTEXT;
-  }
-
-  return [
-    "<EXTREMELY_IMPORTANT>",
-    "You have codex-with-cc routing.",
-    "",
-    "**Below is the full content of your 'codex-with-cc' skill and workflow contract. Follow this routing contract whenever child-agent, subagent, child-thread, delegation, worker-execution, 子代理, 子线程, 多代理, 委派, 派工, or 执行层 appears.**",
-    "",
-    "## codex-with-cc SKILL.md",
-    "",
-    skillText.trim(),
-    "",
-    "## codex-with-cc CODEX_WITH_CC.md",
-    "",
-    contractText.trim(),
-    "",
-    "</EXTREMELY_IMPORTANT>",
-  ].join("\n");
+  return ROUTING_CONTEXT;
 }
 
 function readStdin() {
@@ -164,7 +153,7 @@ function getToolInput(input) {
 }
 
 function getShellCommand(toolInput) {
-  return prop(toolInput, "command", "command") || "";
+  return prop(toolInput, "command", "cmd") || "";
 }
 
 function getPrompt(input) {
@@ -221,13 +210,14 @@ function isFalse(value) {
 }
 
 function toolNameTail(toolName) {
-  const parts = String(toolName || "").toLowerCase().split(/[.:/\\]/).filter(Boolean);
+  const parts = String(toolName || "").toLowerCase().split(/(?:__|[.:/\\])+/).filter(Boolean);
   return parts.length > 0 ? parts[parts.length - 1] : "";
 }
 
 function isShellToolName(toolName) {
   const normalized = String(toolName || "").toLowerCase();
-  return normalized === "bash" || normalized === "shell_command" || toolNameTail(normalized) === "shell_command";
+  const tail = toolNameTail(normalized);
+  return normalized === "bash" || tail === "shell_command" || tail === "exec_command";
 }
 
 function isWorkflowSpawnToolName(toolName) {
@@ -300,6 +290,10 @@ function hasReviewForTaskId(serialized) {
   return /(?:^|[\s"'])(?:-ReviewForTaskId|--review-for-task-id)\b/i.test(serialized);
 }
 
+function hasReviewForRunId(serialized) {
+  return /(?:^|[\s"'])(?:-ReviewForRunId|--review-for-run-id)\b/i.test(serialized);
+}
+
 function hasReviewKind(serialized) {
   return /(?:^|[\s"'])(?:-ReviewKind|--review-kind)\b/i.test(serialized);
 }
@@ -317,11 +311,170 @@ function hasAllowParallel(serialized) {
 }
 
 function hasForbiddenEffort(serialized) {
-  return /(?:^|[\s"'])--effort\b/i.test(serialized);
+  return false;
+}
+
+function unquoteShellToken(token) {
+  const value = String(token || "");
+  if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function shellBasename(token) {
+  const normalized = unquoteShellToken(token).replaceAll("\\", "/").toLowerCase();
+  const parts = normalized.split("/").filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : normalized;
+}
+
+function tokenizeShell(command) {
+  return String(command || "").match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|&&|\|\||[;&|\n\r]|[^\s;&|]+/g) || [];
+}
+
+function shellCommandSegments(command) {
+  const segments = [];
+  let current = [];
+  for (const token of tokenizeShell(command)) {
+    if (/^(?:&&|\|\||[;&|]|\n|\r)$/.test(token)) {
+      if (current.length > 0) {
+        segments.push(current);
+        current = [];
+      }
+    } else {
+      current.push(token);
+    }
+  }
+  if (current.length > 0) {
+    segments.push(current);
+  }
+  return segments;
+}
+
+function isShellAssignment(token) {
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(unquoteShellToken(token));
+}
+
+function optionNeedsValue(token, shortNames, longNames) {
+  const value = unquoteShellToken(token);
+  if (longNames.some((name) => value === name)) {
+    return true;
+  }
+  return shortNames.some((name) => value === name);
+}
+
+function shellSegmentRunsClaude(tokens) {
+  let index = 0;
+  let wrapperCount = 0;
+
+  while (index < tokens.length && wrapperCount < 16) {
+    while (index < tokens.length && isShellAssignment(tokens[index])) {
+      index += 1;
+    }
+    if (index >= tokens.length) {
+      return false;
+    }
+
+    const executable = shellBasename(tokens[index]);
+    if (["claude", "claude.cmd", "claude.exe"].includes(executable)) {
+      return true;
+    }
+
+    if (executable === "env") {
+      index += 1;
+      while (index < tokens.length) {
+        const option = unquoteShellToken(tokens[index]);
+        if (isShellAssignment(option)) {
+          index += 1;
+        } else if (option === "--") {
+          index += 1;
+          break;
+        } else if (["-S", "--split-string"].includes(option)) {
+          const splitCommand = unquoteShellToken(tokens[index + 1]);
+          return Boolean(splitCommand) && hasDirectClaudeShellCommand(splitCommand);
+        } else if (optionNeedsValue(option, ["-u", "-C"], ["--unset", "--chdir"])) {
+          index += 2;
+        } else if (option.startsWith("-")) {
+          index += 1;
+        } else {
+          break;
+        }
+      }
+      wrapperCount += 1;
+      continue;
+    }
+
+    if (executable === "sudo") {
+      index += 1;
+      const valueOptions = ["-u", "-g", "-h", "-p", "-C", "-T", "-R", "-r", "-t"];
+      const longValueOptions = [
+        "--user", "--group", "--host", "--prompt", "--chdir", "--command-timeout",
+        "--chroot", "--role", "--type", "--close-from",
+      ];
+      while (index < tokens.length) {
+        const option = unquoteShellToken(tokens[index]);
+        if (option === "--") {
+          index += 1;
+          break;
+        }
+        if (optionNeedsValue(option, valueOptions, longValueOptions)) {
+          index += 2;
+        } else if (option.startsWith("-")) {
+          index += 1;
+        } else {
+          break;
+        }
+      }
+      wrapperCount += 1;
+      continue;
+    }
+
+    if (["command", "exec", "nohup"].includes(executable)) {
+      index += 1;
+      while (index < tokens.length) {
+        const option = unquoteShellToken(tokens[index]);
+        if (executable === "command" && ["-v", "-V"].includes(option)) {
+          return false;
+        }
+        if (executable === "exec" && optionNeedsValue(option, ["-a"], [])) {
+          index += 2;
+        } else if (option === "--" || option.startsWith("-")) {
+          index += 1;
+        } else {
+          break;
+        }
+      }
+      wrapperCount += 1;
+      continue;
+    }
+
+    if (["sh", "bash", "zsh"].includes(executable)) {
+      for (let optionIndex = index + 1; optionIndex < tokens.length; optionIndex += 1) {
+        const option = unquoteShellToken(tokens[optionIndex]);
+        if (/^-[^-]*c/.test(option)) {
+          const nestedCommand = unquoteShellToken(tokens[optionIndex + 1]);
+          return Boolean(nestedCommand) && hasDirectClaudeShellCommand(nestedCommand);
+        }
+        if (!option.startsWith("-")) {
+          break;
+        }
+      }
+    }
+    return false;
+  }
+  return false;
+}
+
+function hasDirectClaudeShellCommand(command) {
+  return shellCommandSegments(command).some((tokens) => shellSegmentRunsClaude(tokens));
 }
 
 function hasDirectClaudeCommand(serialized) {
-  return /(?:^|[\n\r;&|`"'])\s*(?:\.\/|\.\\|[\w:/\\.-]*[/\\])?claude(?:\.cmd|\.exe)?(?:\s+(?:-|--|<|>|2>|&>|;|\||&&|\|\|)|\s*$|$)/i.test(serialized);
+  const prefix = String.raw`(?:(?:(?:env|command|exec|nohup|sudo)(?:\s+-[^\s;&|]+)*|[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]+))\s+)*`;
+  const executable = String.raw`(?:\.\/|\.\\|[\w:/\\.-]*[/\\])?claude(?:\.cmd|\.exe)?`;
+  const boundary = String.raw`(?:\s+(?:-|--|<|>|2>|&>|;|\||&&|\|\|)|\s*$|$)`;
+  return hasDirectClaudeShellCommand(serialized)
+    || new RegExp(String.raw`(?:^|[\n\r;&|` + "`" + String.raw`"'])\s*${prefix}${executable}${boundary}`, "i").test(serialized);
 }
 
 function hasExplicitModel(payload) {
@@ -347,10 +500,16 @@ function validateWorkflowPayload(payload) {
   } else if (prop(payload, "model", "model") !== REQUIRED_MODEL) {
     problems.push(modelRequirementReason());
   }
-  if (prop(payload, "reasoning_effort", "reasoningEffort") !== REQUIRED_EFFORT) {
+  const effort = prop(payload, "reasoning_effort", "reasoningEffort");
+  if (REQUIRED_EFFORT_POLICY === "inherit_parent") {
+    if (effort !== undefined && effort !== null && String(effort).trim()) {
+      problems.push("reasoning_effort must inherit from the main thread; omit explicit override");
+    }
+  } else if (effort !== REQUIRED_EFFORT) {
     problems.push(`reasoning_effort must be ${REQUIRED_EFFORT}`);
   }
-  if (prop(payload, "fork_context", "forkContext") !== REQUIRED_FORK_CONTEXT) {
+  const forkContext = prop(payload, "fork_context", "forkContext");
+  if (forkContext !== undefined && !isFalse(forkContext)) {
     problems.push("fork_context: false is required");
   }
   if (hasDirectClaudeCommand(serialized)) {
@@ -383,8 +542,8 @@ function validateWorkflowPayload(payload) {
   } else if (!ALLOWED_ROLES.has(role)) {
     problems.push(`-Role must be one of ${Array.from(ALLOWED_ROLES).join(", ")}`);
   }
-  if (role === "reviewer" && (!hasReviewForTaskId(serialized) || !hasReviewKind(serialized))) {
-    problems.push("reviewer runs require -ReviewForTaskId and -ReviewKind");
+  if (role === "reviewer" && (!hasReviewForTaskId(serialized) || !hasReviewForRunId(serialized) || !hasReviewKind(serialized))) {
+    problems.push("reviewer runs require -ReviewForTaskId, -ReviewForRunId, and -ReviewKind");
   }
   if (hasLegacyMode(serialized)) {
     problems.push("legacy -Mode is forbidden; use -Role");
@@ -425,7 +584,7 @@ function handlePreToolUse(input) {
     const problems = [];
     const shellCommand = String(getShellCommand(toolInput) || "");
 
-    if (hasDirectClaudeCommand(serialized)) {
+    if (hasDirectClaudeShellCommand(shellCommand)) {
       problems.push("direct Claude CLI execution is forbidden");
     }
 
@@ -453,8 +612,8 @@ function handlePreToolUse(input) {
       } else if (!ALLOWED_ROLES.has(roleValue(serialized))) {
         problems.push(`-Role must be one of ${Array.from(ALLOWED_ROLES).join(", ")}`);
       }
-      if (roleValue(serialized) === "reviewer" && (!hasReviewForTaskId(serialized) || !hasReviewKind(serialized))) {
-        problems.push("reviewer runs require -ReviewForTaskId and -ReviewKind");
+      if (roleValue(serialized) === "reviewer" && (!hasReviewForTaskId(serialized) || !hasReviewForRunId(serialized) || !hasReviewKind(serialized))) {
+        problems.push("reviewer runs require -ReviewForTaskId, -ReviewForRunId, and -ReviewKind");
       }
       if (hasLegacyMode(serialized)) {
         problems.push("legacy -Mode is forbidden; use -Role");

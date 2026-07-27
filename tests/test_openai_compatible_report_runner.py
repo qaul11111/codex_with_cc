@@ -40,6 +40,7 @@ def _base_args(task_file: Path, artifact_root: Path) -> argparse.Namespace:
         task_id="task-openai-report",
         role="researcher",
         review_for_task_id=None,
+        review_for_run_id=None,
         review_kind=None,
         depends_on=[],
         model="deepseek-v4-flash",
@@ -58,6 +59,10 @@ def _base_args(task_file: Path, artifact_root: Path) -> argparse.Namespace:
         lock_timeout_seconds=0,
         lock_poll_milliseconds=50,
         max_retry_count=0,
+        execution_timeout_seconds=60,
+        silent_timeout_seconds=30,
+        heartbeat_seconds=5,
+        trusted_local_fallback=True,
         bypass_permissions=True,
         dry_run=False,
     )
@@ -232,6 +237,7 @@ def test_openai_compatible_report_runtime_cli_subcommand(monkeypatch, tmp_path: 
             "openai-report-session",
             "-ArtifactRoot",
             str(artifact_root),
+            "-TrustedLocalFallback",
         ]
     )
 
@@ -387,6 +393,7 @@ def test_openai_compatible_report_cli_requires_api_key(monkeypatch, tmp_path: Pa
             "openai-report-session",
             "-ArtifactRoot",
             str(artifact_root),
+            "-TrustedLocalFallback",
         ]
     )
 

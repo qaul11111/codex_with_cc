@@ -14,7 +14,7 @@ Review duties:
 - Confirm generated or risky task files would pass `validate_delegate_task.*`.
 - Check that Status and Final Result use the same valid status token.
 - Check that Role matches the delegated role.
-- Check that reviewer runs include `ReviewForTaskId` and `ReviewKind`.
+- Check that reviewer runs include `ReviewForTaskId`, `ReviewForRunId`, and `ReviewKind`, and that the reviewed run is still the implementer's latest run.
 - Inspect Changed Files and Verification for concrete evidence.
 - Reject `DONE` reports that do not name commands actually run and their outcomes.
 - Reject non-dry-run `DONE` reports that omit commands passed through `-Tests`.

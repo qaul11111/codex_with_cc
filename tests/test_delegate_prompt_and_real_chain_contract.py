@@ -44,6 +44,7 @@ def test_delegate_prompt_and_real_chain_contract() -> None:
                 str(artifact_root),
                 "-SessionKey",
                 "prompt-contract",
+                "-TrustedLocalFallback",
                 "-DryRun",
             ],
             cwd=repo,

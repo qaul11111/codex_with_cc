@@ -9,8 +9,21 @@
   "spawn": {
     "model": "",
     "modelPolicy": "inherit_parent",
-    "reasoningEffort": "medium",
+    "reasoningEffort": "",
+    "reasoningEffortPolicy": "inherit_parent",
     "forkContext": false
+  },
+  "provenance": {
+    "hostTranscriptFields": [
+      "transcript_path",
+      "transcriptPath"
+    ],
+    "subagentSessionMetaSignals": [
+      "source.subagent",
+      "thread_source=subagent",
+      "parent_thread_id"
+    ],
+    "fallbackPolicy": "child_marker"
   },
   "workerRoles": [
     "planner",
@@ -66,6 +79,7 @@
   ],
   "reviewerRequiredArgs": [
     "-ReviewForTaskId",
+    "-ReviewForRunId",
     "-ReviewKind"
   ],
   "parallelRequiredArgs": [
@@ -76,9 +90,7 @@
       "-Task",
       "-Mode"
     ],
-    "forbiddenClaudeArgs": [
-      "--effort"
-    ]
+    "forbiddenClaudeArgs": []
   },
   "sessionModes": [
     "PrimaryReuse",

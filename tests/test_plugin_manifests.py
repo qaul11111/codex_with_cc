@@ -19,9 +19,9 @@ def test_plugin_manifest_and_docs_contract() -> None:
 
     codex_plugin = json.loads(codex_plugin_path.read_text(encoding="utf-8"))
     assert codex_plugin["name"] == "codex-with-cc"
-    assert codex_plugin["version"] == "1.0.9"
+    assert codex_plugin["version"] == "1.1.0"
     assert codex_plugin["skills"] == "./skills/"
-    assert codex_plugin["hooks"] == "./hooks/hooks.json"
+    assert "hooks" not in codex_plugin
     assert (repo / "hooks" / "hooks.json").exists()
 
     codex_interface = codex_plugin["interface"]

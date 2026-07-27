@@ -78,6 +78,7 @@ def test_delegate_sends_long_prompt_via_stdin() -> None:
                 str(artifact_root),
                 "-SessionKey",
                 "long-prompt-session",
+                "-TrustedLocalFallback",
                 "-BypassPermissions",
             ],
             cwd=repo,

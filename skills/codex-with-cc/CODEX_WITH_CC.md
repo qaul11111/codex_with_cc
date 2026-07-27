@@ -9,11 +9,11 @@ Read this file before using the workflow in this repository. Treat `contract.jso
 1. Any child-agent, subagent, sub-agent, child-thread, subthread, delegation, worker-execution, 子代理, 子线程, 多代理, 委派, 派工, or 执行层 request must use this workflow.
 2. Do not replace it with the default Codex subagent flow, host worker shortcuts, direct `claude`, or direct main-thread `delegate_to_claude.*`.
 3. The Codex main thread owns design, task boundaries, acceptance criteria, review decisions, rework decisions, and final delivery.
-4. Every Claude Code worker run must be carried by a fresh Codex `spawn_agent` child thread that inherits the main-thread model, uses `reasoning_effort: medium`, and sets `fork_context: false`.
+4. Every Claude Code worker run must be carried by a fresh Codex `spawn_agent` child thread that inherits the main-thread model and reasoning effort; `fork_context` may be omitted or set to `false`.
 5. The child thread must set `CODEX_CLAUDE_CHILD_THREAD=1` before invoking `delegate_to_claude.*`.
 6. Delegate commands must use task-file-only invocation. `-TaskFile`, `-WorkflowId`, `-TaskId`, `-Role`, and `-SessionKey` are required.
 7. Legacy inline `-Task`, legacy `-Mode`, missing workflow metadata, and implicit session-key fallback are not supported.
-8. `delegate_to_claude.*` must not pass `--effort`; Claude Code uses its configured default effort.
+8. The runner selects Claude effort by role: `high` for implementer/final-verifier and `medium` for planner/researcher/reviewer.
 9. Workers must follow the TaskFile contract: Goal, Allowed Scope, Forbidden Actions, Acceptance Criteria, Verification, and Report Requirements.
 10. Task files with empty sections, obvious placeholders, or incomplete Report Requirements are invalid; use `validate_delegate_task.*` before dispatch when preparing non-trivial work.
 11. Workers must finish with the exact report headings and concrete verification evidence.
@@ -32,14 +32,14 @@ The protocol models every request as:
 
 Artifacts use the current artifact schema. Each run writes `config_<RunId>.json`, `status_<RunId>.json`, `prompt_<RunId>.md`, `stream_<RunId>.jsonl`, `trace_<RunId>.log`, and `claude_<RunId>.md`. Each workflow also writes `workflow_<WorkflowId>.json`, which indexes tasks, runs, scope, verification, review metadata, and final acceptance state.
 
-Reviewer runs must pass `-ReviewForTaskId` and `-ReviewKind spec` or `-ReviewKind quality`. Implementer tasks are not workflow-accepted until both spec and quality reviews are accepted. Task dependencies can be recorded with repeated `-DependsOn <task-id>` values.
+Reviewer runs must pass `-ReviewForTaskId`, `-ReviewForRunId`, and `-ReviewKind spec` or `-ReviewKind quality`. Reviews bind to one exact implementer run and become stale after the implementer reruns. Implementer tasks are not workflow-accepted until both current reviews are accepted. Task dependencies can be recorded with repeated `-DependsOn <task-id>` values.
 
 ## Workflow Method
 Use this as a controlled delivery pipeline, borrowing the core discipline from Superpowers:
 
 1. Design gate: clarify the goal, success criteria, scope, constraints, and acceptance evidence before dispatch.
 2. Plan gate: split work into task-file-sized assignments with explicit allowed scope, forbidden actions, verification commands, and review gates.
-3. Dispatch gate: create a fresh child thread per task; do not let workers inherit noisy main-thread context.
+3. Dispatch gate: create a fresh child thread per task; do not let workers inherit noisy main-thread context. Spawn every independent task before waiting, batch-wait on all active ids, and close every completed, failed, interrupted, or replaced attempt.
 4. Implementer gate: implementation workers must use test-first or the smallest equivalent verification-first evidence when the repository has a practical test surface.
 5. Review in two passes. First perform spec compliance review; then perform quality review for minimality, maintainability, regression risk, and test sufficiency.
 6. Final-verifier gate: use a final verifier to confirm the aggregate workflow, residual risks, declared verification evidence, and accepted review gates.
@@ -76,16 +76,16 @@ pwsh -NoProfile -File <installed-workflow-root>\windows_scripts\validate_delegat
 ```
 
 ## Platform Hook Gate
-The Codex plugin declares `./hooks/hooks.json` as a semi-hard platform gate. When hooks are enabled:
+Codex automatically discovers `./hooks/hooks.json` from the plugin convention directory and uses it as a semi-hard platform gate. The manifest intentionally omits the unsupported `hooks` field. When hooks are enabled:
 
-- `SessionStart` injects this full contract.
-- `UserPromptSubmit` reinforces the contract for delegation trigger words.
+- `SessionStart` injects a compact routing contract instead of duplicating this full document.
+- `UserPromptSubmit` reinforces the compact routing contract for delegation trigger words.
 - `PreToolUse` denies visible direct `claude`, direct main-thread `delegate_to_claude.*`, missing `CODEX_CLAUDE_CHILD_THREAD=1`, missing `-TaskFile`, missing workflow metadata, missing `-SessionKey`, legacy `-Task`, legacy `-Mode`, reviewer runs without review metadata, and parallel writable runs without `-Scope`.
 
 The hook reads `contract.json` for shared tokens. This is not a kernel boundary; final responsibility remains with the Codex main thread.
 
 ## Trusted Local Terminal Fallback
-This fallback is an execution-location fallback only. Preserve the same `CODEX_CLAUDE_CHILD_THREAD=1` marker, task file, `WorkflowId`, `TaskId`, `Role`, `SessionKey`, session mode, artifact root, scope, and permission flags that the child thread would have used.
+This fallback is an execution-location fallback only. Preserve the same `CODEX_CLAUDE_CHILD_THREAD=1` marker, task file, `WorkflowId`, `TaskId`, `Role`, `SessionKey`, session mode, artifact root, scope, and permission flags that the child thread would have used, and pass `-TrustedLocalFallback` so an inherited main-thread `CODEX_THREAD_ID` does not masquerade as child-agent lifecycle evidence.
 
 Do not replace this with the default Codex subagent flow, a direct `claude` command, or a modified worker command. Report that the trusted terminal fallback was used and include the command outcome in verification.
 
@@ -110,11 +110,32 @@ Worker roles:
 Workers are context consumers, not decision owners. They must not create nested delegate runs, broaden scope, or decide that unassigned follow-up work should be executed. When a worker lacks context, it reports `NEEDS_CONTEXT`.
 
 ## Session Modes
-- `PrimaryReuse`: default serial mode. Reuses the main Claude session for continuity.
+- `PrimaryReuse`: default for planner, researcher, and implementer serial work. Reuses the main Claude session for continuity.
 - `PrimaryAnchor`: parallel-batch anchor. Its result becomes the main reusable context for later serial work.
-- `ParallelPool`: independent parallel side work. Uses reusable pool sessions without writing to the main session.
+- `ParallelPool`: default for reviewer and final-verifier independence, and for parallel side work. Uses reusable pool sessions without writing to the main session.
 
 Only use `-AllowParallel` when task scopes are independent. Parallel writable tasks must pass explicit `-Scope` values. After parallel work, return to serial review before accepting implementation changes.
+
+The default session/lock wait is 30 seconds. Claude execution defaults to 3600 seconds for implementers and 1800 seconds for other roles, with a 600-second silent-output timeout and 15-second heartbeat/lease renewal. Override these explicitly only when the task justifies it.
+
+## Codex Agent Lifecycle
+After each successful `spawn_agent`, record the returned id before waiting:
+
+```bash
+python3 "<installed-workflow-root>/scripts/runtime.py" record-agent-spawn \
+  -WorkflowId <workflow-id> -TaskId <task-id> -AgentId <agent-id> \
+  -ArtifactRoot <artifact-root>
+```
+
+Wait on all active ids together. After `close_agent` succeeds, record closure against the same task and id:
+
+```bash
+python3 "<installed-workflow-root>/scripts/runtime.py" record-agent-close \
+  -WorkflowId <workflow-id> -TaskId <task-id> -AgentId <agent-id> \
+  -ArtifactRoot <artifact-root>
+```
+
+Every non-fallback child run with `CODEX_THREAD_ID` requires explicit spawn and close records. Missing or unclosed attempts block final acceptance.
 
 ## Worker Output
 Claude Code must finish with these exact headings:
@@ -195,7 +216,7 @@ export CODEX_CLAUDE_CHILD_THREAD=1
   -BypassPermissions
 ```
 
-Reviewer runs add `-Role reviewer -ReviewForTaskId <implementer-task-id> -ReviewKind spec` or `-Role reviewer -ReviewForTaskId <implementer-task-id> -ReviewKind quality`.
+Reviewer runs add `-Role reviewer -ReviewForTaskId <implementer-task-id> -ReviewForRunId <current-implementer-run-id> -ReviewKind spec` or the same command with `-ReviewKind quality`.
 
 ## Verification
 Run local regression tests after installing or changing this workflow.

@@ -138,8 +138,8 @@ Required Codex orchestration rules:
 - The Codex main thread may only create spawn_agent child threads and collect results.
 - Every Claude worker must run inside a child thread with:
   - model: inherit from the current main thread
-  - reasoning_effort: medium
-  - fork_context: false
+  - reasoning_effort: inherit from the current main thread
+  - fork_context: omitted or false
 - Every child thread must set CODEX_CLAUDE_CHILD_THREAD=1 and then call {delegate_entry} with -TaskFile.
 - Do not run Claude CLI or delegate_to_claude directly from the main thread.
 

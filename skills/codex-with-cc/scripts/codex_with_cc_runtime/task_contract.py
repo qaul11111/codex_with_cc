@@ -94,6 +94,7 @@ def validate_delegate_task_file(
     task_file: Path | str,
     role: str,
     review_for_task_id: str | None = None,
+    review_for_run_id: str | None = None,
     review_kind: str | None = None,
     tests: list[str] | None = None,
 ) -> None:
@@ -101,8 +102,8 @@ def validate_delegate_task_file(
     if role_value not in WORKER_ROLES:
         expected = ", ".join(WORKER_ROLES)
         raise DelegateError(f"Task validation failed. Invalid role: {role!r} (choose from {expected}).")
-    if role_value == "reviewer" and (not review_for_task_id or not review_kind):
-        raise DelegateError("Task validation failed. Reviewer tasks require -ReviewForTaskId and -ReviewKind.")
+    if role_value == "reviewer" and (not review_for_task_id or not review_for_run_id or not review_kind):
+        raise DelegateError("Task validation failed. Reviewer tasks require -ReviewForTaskId, -ReviewForRunId, and -ReviewKind.")
     task_text = read_text(Path(task_file))
     validate_task_file_contract(task_text)
     sections = task_file_sections(task_text)
@@ -117,6 +118,7 @@ def run_validate_task(ns) -> int:
         ns.task_file,
         ns.role,
         ns.review_for_task_id,
+        ns.review_for_run_id,
         ns.review_kind,
         ns.tests,
     )

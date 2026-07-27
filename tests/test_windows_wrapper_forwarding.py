@@ -165,6 +165,7 @@ def test_delegate_wrapper_is_thin_and_forwards_to_python() -> None:
             "-MaxRetryCount",
             "0",
             "-BypassPermissions",
+            "-TrustedLocalFallback",
             "-DryRun",
             env={"CODEX_CLAUDE_CHILD_THREAD": "1"},
         )
@@ -199,6 +200,7 @@ def test_delegate_wrapper_is_thin_and_forwards_to_python() -> None:
             str(file_artifact_root),
             "-SessionKey",
             "wrapper-file-session",
+            "-TrustedLocalFallback",
             "-DryRun",
             env={"CODEX_CLAUDE_CHILD_THREAD": "1"},
         )
@@ -273,6 +275,7 @@ def test_windows_artifact_and_chain_wrappers_forward_to_python() -> None:
                 "chain-wrapper-session",
                 "-SessionMode",
                 mode,
+                "-TrustedLocalFallback",
                 *extra,
                 env=env,
             )

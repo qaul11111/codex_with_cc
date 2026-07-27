@@ -7,6 +7,86 @@ from typing import Any, Iterable
 from .reports import text_has_required_report_headings
 
 
+REPORT_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string", "enum": ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED", "FAIL"]},
+        "role": {"type": "string", "enum": ["planner", "implementer", "researcher", "reviewer", "final-verifier"]},
+        "summary": {"type": "string"},
+        "changedFiles": {"type": "array", "items": {"type": "string"}},
+        "verification": {"type": "array", "items": {"type": "string"}},
+        "findings": {"type": "array", "items": {"type": "string"}},
+        "finalResult": {"type": "string", "enum": ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED", "FAIL"]},
+        "risksOrFollowUps": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "status",
+        "role",
+        "summary",
+        "changedFiles",
+        "verification",
+        "findings",
+        "finalResult",
+        "risksOrFollowUps",
+    ],
+    "additionalProperties": False,
+}
+
+
+def structured_report_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+
+    def lines(name: str) -> str:
+        items = value.get(name)
+        if not isinstance(items, list) or not items:
+            return "None"
+        return "\n".join(f"- {item}" for item in items)
+
+    status = str(value.get("status") or "")
+    role = str(value.get("role") or "")
+    final_result = str(value.get("finalResult") or "")
+    if not status or not role or not final_result:
+        return ""
+    return f"""Status
+{status}
+
+Role
+{role}
+
+Summary
+{value.get("summary") or "None"}
+
+Changed Files
+{lines("changedFiles")}
+
+Verification
+{lines("verification")}
+
+Findings
+{lines("findings")}
+
+Final Result
+{final_result}
+
+Risks Or Follow-ups
+{lines("risksOrFollowUps")}
+"""
+
+
+def role_effort(role: str) -> str:
+    if role in ("implementer", "final-verifier"):
+        return "high"
+    return "medium"
+
+
+def role_disallowed_tools(role: str) -> str:
+    tools = ["Agent", "Task"]
+    if role in ("planner", "researcher", "reviewer", "final-verifier"):
+        tools.extend(["Edit", "Write", "NotebookEdit"])
+    return ",".join(tools)
+
+
 
 def text_blocks(content: Any) -> list[str]:
     if content is None:
@@ -27,6 +107,10 @@ def update_stream_capture(record: dict[str, Any], state: dict[str, Any]) -> list
     state.setdefault("sawAssistantText", False)
     state.setdefault("sawResultSuccess", False)
     state.setdefault("capturedFinalResultHeading", False)
+    state.setdefault("totalCostUsd", None)
+    state.setdefault("usage", {})
+    state.setdefault("modelUsage", {})
+    state.setdefault("models", [])
 
     trace_lines: list[str] = []
     record_type = str(record.get("type", ""))
@@ -41,6 +125,10 @@ def update_stream_capture(record: dict[str, Any], state: dict[str, Any]) -> list
         message = record.get("message") if isinstance(record.get("message"), dict) else {}
         message_id = message.get("id")
         trace_lines.append(f"[assistant] message={message_id}" if message_id else "[assistant]")
+        if isinstance(message.get("usage"), dict):
+            state["usage"] = message["usage"]
+        if message.get("model") and message["model"] not in state["models"]:
+            state["models"].append(message["model"])
         texts = text_blocks(message.get("content"))
         if texts:
             text = "\n".join(texts).strip()
@@ -55,8 +143,20 @@ def update_stream_capture(record: dict[str, Any], state: dict[str, Any]) -> list
         line = "[result]"
         if subtype:
             line += f" {subtype}"
-        if record.get("cost_usd") is not None:
-            line += f" cost={record['cost_usd']}"
+        reported_cost = record.get("total_cost_usd", record.get("cost_usd"))
+        if reported_cost is not None:
+            state["totalCostUsd"] = reported_cost
+            line += f" cost={reported_cost}"
+        if isinstance(record.get("usage"), dict):
+            state["usage"] = record["usage"]
+        if isinstance(record.get("modelUsage"), dict):
+            state["modelUsage"] = record["modelUsage"]
+        structured_text = structured_report_text(record.get("structured_output"))
+        if structured_text:
+            state["sawAssistantText"] = True
+            state["capturedFinalResultHeading"] = True
+            state["assistantTexts"].append(structured_text)
+            state["finalText"] = structured_text
         if subtype == "success":
             state["sawResultSuccess"] = True
         trace_lines.append(line)
@@ -75,7 +175,8 @@ def update_stream_capture(record: dict[str, Any], state: dict[str, Any]) -> list
 
 def new_claude_cli_args(
     model: str,
-    _session_name: str,
+    session_name: str,
+    role: str,
     session_id: str,
     resume: bool,
     max_budget_usd: str | None,
@@ -90,8 +191,16 @@ def new_claude_cli_args(
         "text",
         "--model",
         model,
+        "--name",
+        session_name,
+        "--effort",
+        role_effort(role),
+        "--disallowed-tools",
+        role_disallowed_tools(role),
+        "--json-schema",
+        json.dumps(REPORT_JSON_SCHEMA, separators=(",", ":")),
         "--permission-mode",
-        "acceptEdits",
+        "bypassPermissions" if bypass_permissions else "acceptEdits",
     ]
     args.extend(["--resume" if resume else "--session-id", session_id])
     if max_budget_usd not in (None, ""):

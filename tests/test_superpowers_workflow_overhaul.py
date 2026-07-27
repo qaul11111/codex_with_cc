@@ -32,8 +32,11 @@ def write_raw_task(root: Path, name: str, text: str) -> Path:
 
 
 def run_python(script: Path, *args: str, cwd: Path = REPO) -> subprocess.CompletedProcess[str]:
+    argv = [sys.executable, str(script), *args]
+    if script == DELEGATE:
+        argv.append("-TrustedLocalFallback")
     return subprocess.run(
-        [sys.executable, str(script), *args],
+        argv,
         cwd=cwd,
         text=True,
         capture_output=True,
@@ -50,27 +53,40 @@ def run_id_from_output(output: str) -> str:
 
 def run_delegate(root: Path, artifact_root: Path, task_id: str, role: str, *extra: str) -> subprocess.CompletedProcess[str]:
     task_file = write_task(root, task_id, f"{task_id} delegated task")
-    return run_python(
-        DELEGATE,
-        "-TaskFile",
-        str(task_file),
-        "-WorkflowId",
-        "wf-review-gate",
-        "-TaskId",
-        task_id,
-        "-Role",
-        role,
-        "-SessionKey",
-        "review-gate",
-        "-ArtifactRoot",
-        str(artifact_root),
-        *extra,
-        "-DryRun",
+    fake_bin = make_fake_claude_bin(root, role, "- fake verification passed")
+    return subprocess.run(
+        [
+            sys.executable,
+            str(DELEGATE),
+            "-TaskFile",
+            str(task_file),
+            "-WorkflowId",
+            "wf-review-gate",
+            "-TaskId",
+            task_id,
+            "-Role",
+            role,
+            "-SessionKey",
+            "review-gate",
+            "-ArtifactRoot",
+            str(artifact_root),
+            "-TrustedLocalFallback",
+            *extra,
+        ],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "CODEX_CLAUDE_CHILD_THREAD": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        },
     )
 
 
 def make_fake_claude_bin(root: Path, role: str, verification: str) -> Path:
-    fake_bin = root / "fake-claude-bin"
+    fake_bin = root / f"fake-claude-bin-{role}"
     fake_bin.mkdir(parents=True, exist_ok=True)
     report = "\n".join(
         (
@@ -311,6 +327,7 @@ def test_workflow_verifier_requires_spec_and_quality_review_for_implementers() -
 
         implementer = run_delegate(root, artifact_root, "task-implement", "implementer")
         assert implementer.returncode == 0, implementer.stdout + implementer.stderr
+        implementer_run_id = run_id_from_output(implementer.stdout)
 
         missing_reviews = run_python(
             VERIFY_WORKFLOW,
@@ -332,6 +349,8 @@ def test_workflow_verifier_requires_spec_and_quality_review_for_implementers() -
                 "reviewer",
                 "-ReviewForTaskId",
                 "task-implement",
+                "-ReviewForRunId",
+                implementer_run_id,
                 "-ReviewKind",
                 review_kind,
             )
@@ -385,6 +404,7 @@ def test_workflow_verifier_requires_declared_tests_in_done_reports() -> None:
                 "pytest -q",
                 "-ArtifactRoot",
                 str(artifact_root),
+                "-TrustedLocalFallback",
             ],
             cwd=REPO,
             text=True,
@@ -397,6 +417,7 @@ def test_workflow_verifier_requires_declared_tests_in_done_reports() -> None:
             },
         )
         assert implementer.returncode == 0, implementer.stdout + implementer.stderr
+        implementer_run_id = run_id_from_output(implementer.stdout)
         for review_kind in ("spec", "quality"):
             reviewer = run_delegate(
                 root,
@@ -405,6 +426,8 @@ def test_workflow_verifier_requires_declared_tests_in_done_reports() -> None:
                 "reviewer",
                 "-ReviewForTaskId",
                 "task-implement",
+                "-ReviewForRunId",
+                implementer_run_id,
                 "-ReviewKind",
                 review_kind,
             )
@@ -451,6 +474,7 @@ def test_workflow_verifier_accepts_declared_run_id_placeholder_evidence() -> Non
                 declared,
                 "-ArtifactRoot",
                 str(artifact_root),
+                "-TrustedLocalFallback",
             ],
             cwd=REPO,
             text=True,
@@ -523,6 +547,7 @@ def test_workflow_verifier_rejects_overlapping_parallel_implementer_scope() -> N
                 "-AllowParallel",
             )
             assert implementer.returncode == 0, implementer.stdout + implementer.stderr
+            implementer_run_id = run_id_from_output(implementer.stdout)
             for review_kind in ("spec", "quality"):
                 reviewer = run_delegate(
                     root,
@@ -531,6 +556,8 @@ def test_workflow_verifier_rejects_overlapping_parallel_implementer_scope() -> N
                     "reviewer",
                     "-ReviewForTaskId",
                     task_id,
+                    "-ReviewForRunId",
+                    implementer_run_id,
                     "-ReviewKind",
                     review_kind,
                 )

@@ -86,8 +86,8 @@ def make_fake_claude_bin(root: Path) -> Path:
     return fake_bin
 
 
-def make_name_rejecting_fake_claude_bin(root: Path) -> Path:
-    fake_bin = root / "fake-name-rejecting-claude-bin"
+def make_name_requiring_fake_claude_bin(root: Path) -> Path:
+    fake_bin = root / "fake-name-requiring-claude-bin"
     fake_bin.mkdir(parents=True, exist_ok=True)
     script = fake_bin / "fake_name_rejecting_claude.py"
     assistant = json.dumps(
@@ -100,8 +100,8 @@ def make_name_rejecting_fake_claude_bin(root: Path) -> Path:
                 "import sys",
                 "",
                 "sys.stdin.read()",
-                "if '--name' in sys.argv[1:]:",
-                "    print(\"error: unknown option '--name'\")",
+                "if '--name' not in sys.argv[1:]:",
+                "    print(\"error: required option '--name' was not passed\")",
                 "    raise SystemExit(1)",
                 f"print({assistant!r})",
                 f"print({result!r})",
@@ -250,6 +250,7 @@ def run_delegate(
             str(artifact_root),
             "-SessionKey",
             "edge-contract",
+            "-TrustedLocalFallback",
         ],
         cwd=REPO,
         text=True,
@@ -273,6 +274,7 @@ def run_delegate_with_default_artifact_root(task_file: Path, cwd: Path, env: dic
             "researcher",
             "-SessionKey",
             "default-artifact-fallback",
+            "-TrustedLocalFallback",
             "-DryRun",
         ],
         cwd=cwd,
@@ -313,11 +315,11 @@ def test_custom_output_path_is_verified_from_config() -> None:
         assert f"Artifact verification passed for RunId: {run_id}" in verified.stdout
 
 
-def test_delegate_does_not_pass_removed_claude_name_option() -> None:
-    with tempfile.TemporaryDirectory(prefix="codex_with_cc_no_claude_name_arg_") as tmp:
+def test_delegate_passes_supported_claude_name_option() -> None:
+    with tempfile.TemporaryDirectory(prefix="codex_with_cc_claude_name_arg_") as tmp:
         root = Path(tmp)
         artifact_root = root / "artifacts"
-        fake_bin = make_name_rejecting_fake_claude_bin(root)
+        fake_bin = make_name_requiring_fake_claude_bin(root)
 
         result = run_delegate(
             "current Claude CLI compatibility",

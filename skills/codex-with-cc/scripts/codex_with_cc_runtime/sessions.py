@@ -31,7 +31,20 @@ def effective_session_key(value: str | None) -> str:
 
 def safe_session_key(value: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", value)
-    return safe or "default"
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:10]
+    return f"{safe[:80] or 'default'}-{digest}"
+
+
+def default_session_mode(role: str) -> str:
+    if role.strip().lower() in ("reviewer", "final-verifier"):
+        return "ParallelPool"
+    return "PrimaryReuse"
+
+
+def default_execution_timeout_seconds(role: str) -> int:
+    if role.strip().lower() == "implementer":
+        return 3600
+    return 1800
 
 
 
@@ -324,6 +337,38 @@ def release_session_lease(
     with contextlib.suppress(Exception):
         update_session_state(state_path, lock_path, key, 30, updater)
 
+
+
+def renew_session_lease(
+    state_path: Path,
+    lock_path: Path,
+    key: str,
+    lease: SessionLease | None,
+    run_id: str,
+) -> bool:
+    if lease is None or not lease.leased:
+        return False
+
+    def updater(state: dict[str, Any]) -> bool:
+        now = now_iso()
+        if lease.mode in ("PrimaryReuse", "PrimaryAnchor"):
+            primary = state["primary"]
+            if str(primary.get("leaseRunId")) != run_id:
+                return False
+            primary["leasedAt"] = now
+            primary["leasePid"] = os.getpid()
+            return True
+        for slot in state["parallelPool"]:
+            if str(slot.get("sessionId")) == lease.session_id and str(slot.get("leaseRunId")) == run_id:
+                slot["leasedAt"] = now
+                slot["leasePid"] = os.getpid()
+                return True
+        return False
+
+    try:
+        return bool(update_session_state(state_path, lock_path, key, 0, updater))
+    except DelegateError:
+        return False
 
 
 def reset_session_lease_for_fresh_session(

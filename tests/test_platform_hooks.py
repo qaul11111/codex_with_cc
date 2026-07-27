@@ -48,15 +48,14 @@ def test_session_start_injects_codex_with_cc_contract() -> None:
     context = specific["additionalContext"]
 
     assert specific["hookEventName"] == "SessionStart"
-    assert "<EXTREMELY_IMPORTANT>" in context
-    assert "Below is the full content of your 'codex-with-cc' skill" in context
-    assert "# Codex with CC" in context
-    assert "## Core Contract" in context
+    assert len(context) < 5000
+    assert "Below is the full content" not in context
+    assert "record every spawned agent id" in context
     assert "codex-with-cc" in context
     assert "spawn_agent" in context
     assert "delegate_to_claude" in context
     assert "Claude Code CLI" in context
-    assert "Workflow Method" in context
+    assert "close every agent attempt" in context
 
 
 def test_user_prompt_submit_reinforces_contract_for_subagent_requests() -> None:
@@ -68,10 +67,10 @@ def test_user_prompt_submit_reinforces_contract_for_subagent_requests() -> None:
     )
     context = hook_specific(output)["additionalContext"]
 
-    assert "<EXTREMELY_IMPORTANT>" in context
-    assert "Below is the full content of your 'codex-with-cc' skill" in context
+    assert len(context) < 5000
+    assert "Below is the full content" not in context
     assert "codex-with-cc" in context
-    assert "default Codex subagent" in context
+    assert "spawn_agent child thread" in context
 
 
 def test_user_prompt_submit_ignores_unrelated_prompts() -> None:
@@ -163,7 +162,6 @@ def test_pre_tool_use_allows_compliant_spawn_agent_payload() -> None:
                     "-WorkflowId wf-a -TaskId task-a -Role researcher -SessionKey wf-a "
                     "-Scope skills/codex-with-cc"
                 ),
-                "reasoning_effort": "medium",
                 "fork_context": False,
             },
         }
@@ -186,7 +184,6 @@ def test_pre_tool_use_allows_compliant_spawn_agent_payload_with_runner_descripti
                     "-WorkflowId wf-a -TaskId task-a -Role researcher -SessionKey wf-a "
                     "-Scope skills/codex-with-cc"
                 ),
-                "reasoning_effort": "medium",
                 "fork_context": False,
             },
         }

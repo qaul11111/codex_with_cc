@@ -16,9 +16,9 @@ from .common import ARTIFACT_SCHEMA_VERSION, CHILD_MARKER_NAME, CHILD_MARKER_VAL
 from .io_utils import read_text, test_path_writable, write_json, write_text
 from .paths import project_artifact_root, repo_root, user_artifact_root, workflow_relative_path, workflow_root
 from .reports import parse_report_final_result, parse_report_role, parse_report_status, text_has_required_report_headings
-from .sessions import normalize_delegate_list
+from .sessions import default_session_mode, normalize_delegate_list
 from .task_contract import validate_task_file_contract
-from .workflow import normalize_role, safe_task_id, update_workflow_record
+from .workflow import capture_final_verifier_snapshot, normalize_role, safe_task_id, update_workflow_record
 
 RUNNER_TYPE = "openai_compatible_report"
 
@@ -242,8 +242,20 @@ def run_openai_compatible_report_delegate(ns: argparse.Namespace) -> int:
     validate_task_file_contract(task_text)
 
     role = normalize_role(ns.role)
-    if role == "reviewer" and (not ns.review_for_task_id or not ns.review_kind):
-        raise DelegateError("Reviewer runs must pass -ReviewForTaskId and -ReviewKind.")
+    review_for_run_id = getattr(ns, "review_for_run_id", None)
+    if role == "reviewer" and (
+        not ns.review_for_task_id or not review_for_run_id or not ns.review_kind
+    ):
+        raise DelegateError("Reviewer runs must pass -ReviewForTaskId, -ReviewForRunId, and -ReviewKind.")
+    ns.session_mode = ns.session_mode or default_session_mode(role)
+    host_codex_thread_id = os.environ.get("CODEX_THREAD_ID") or None
+    trusted_local_fallback = bool(getattr(ns, "trusted_local_fallback", False))
+    if not trusted_local_fallback and not host_codex_thread_id:
+        raise DelegateError(
+            "CODEX_THREAD_ID is required for Codex child-agent runs. "
+            "Use -TrustedLocalFallback only for the documented local terminal fallback."
+        )
+    codex_thread_id = None if trusted_local_fallback else host_codex_thread_id
 
     wf_root = workflow_root()
     if not (wf_root / "CODEX_WITH_CC.md").exists():
@@ -256,6 +268,7 @@ def run_openai_compatible_report_delegate(ns: argparse.Namespace) -> int:
     depends_on = [safe_task_id(item) for item in normalize_delegate_list(ns.depends_on)]
 
     artifact_root, fallback_reason = _resolve_artifact_root(ns.artifact_root)
+    verifier_snapshot = capture_final_verifier_snapshot(artifact_root, workflow_id) if role == "final-verifier" else None
     run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]}_{uuid.uuid4().hex[:8]}"
     paths = _build_paths(artifact_root, run_id, ns.output_path)
 
@@ -306,7 +319,13 @@ def run_openai_compatible_report_delegate(ns: argparse.Namespace) -> int:
         "tests": tests,
         "dependsOn": depends_on,
         "reviewForTaskId": ns.review_for_task_id,
+        "reviewForRunId": review_for_run_id,
         "reviewKind": ns.review_kind,
+        "dryRun": bool(ns.dry_run),
+        "codexThreadId": codex_thread_id,
+        "hostCodexThreadId": host_codex_thread_id,
+        "trustedLocalFallback": trusted_local_fallback,
+        "verifiedImplementerRuns": verifier_snapshot,
         "outputPath": str(paths["output"]),
         "statusPath": str(paths["status"]),
         "promptPath": str(paths["prompt"]),
@@ -335,6 +354,8 @@ def run_openai_compatible_report_delegate(ns: argparse.Namespace) -> int:
         "taskId": task_id,
         "role": role,
         "runnerType": RUNNER_TYPE,
+        "dryRun": bool(ns.dry_run),
+        "codexThreadId": codex_thread_id,
         "childThreadMarkerName": CHILD_MARKER_NAME,
         "childThreadMarkerValidated": True,
         "status": "running",
@@ -440,8 +461,12 @@ def run_openai_compatible_report_delegate(ns: argparse.Namespace) -> int:
         trace_path=paths["trace"],
         run_status=status["status"],
         review_for_task_id=ns.review_for_task_id,
+        review_for_run_id=review_for_run_id,
         review_kind=ns.review_kind,
         runner_type=RUNNER_TYPE,
+        dry_run=bool(ns.dry_run),
+        codex_thread_id=codex_thread_id,
+        verified_implementer_runs=verifier_snapshot,
     )
 
     print(f"RunId: {run_id}")

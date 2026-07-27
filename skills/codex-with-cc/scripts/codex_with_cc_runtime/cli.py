@@ -4,13 +4,14 @@ import argparse
 import sys
 from typing import Callable
 
-from .artifacts import run_verify_artifacts, run_verify_chain, run_verify_workflow
+from .artifacts import resolve_artifact_root, run_verify_artifacts, run_verify_chain, run_verify_workflow
 from .common import DelegateError, WORKER_ROLES
 from .delegate import run_delegate
 from .openai_compatible_report import run_openai_compatible_report_delegate
 from .real_chain import run_real_chain_validation
 from .selftests import run_test_runtime, run_test_session_pool
 from .task_contract import run_validate_task
+from .workflow import record_agent_close, record_agent_spawn
 from .ccviz_parser import list_workflows, get_workflow_details
 from .ccviz_renderer import render_list, render_show, render_audit
 
@@ -52,6 +53,7 @@ def add_delegate_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-TaskId", dest="task_id", required=True)
     parser.add_argument("-Role", dest="role", type=choice_arg(list(WORKER_ROLES)), required=True)
     parser.add_argument("-ReviewForTaskId", dest="review_for_task_id")
+    parser.add_argument("-ReviewForRunId", dest="review_for_run_id")
     parser.add_argument("-ReviewKind", dest="review_kind", type=choice_arg(["spec", "quality"]))
     parser.add_argument("-DependsOn", dest="depends_on", action="append", default=[])
     parser.add_argument("-Model", dest="model", default="sonnet")
@@ -61,15 +63,19 @@ def add_delegate_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-ArtifactRoot", dest="artifact_root")
     parser.add_argument("-OutputPath", dest="output_path")
     parser.add_argument("-AllowParallel", dest="allow_parallel", action="store_true")
-    parser.add_argument("-SessionMode", dest="session_mode", type=choice_arg(["PrimaryReuse", "PrimaryAnchor", "ParallelPool"]), default="PrimaryReuse")
+    parser.add_argument("-SessionMode", dest="session_mode", type=choice_arg(["PrimaryReuse", "PrimaryAnchor", "ParallelPool"]))
     parser.add_argument("-SessionKey", dest="session_key", required=True)
     parser.add_argument("-SessionLeaseTimeoutSeconds", dest="session_lease_timeout_seconds", type=int, default=21600)
-    parser.add_argument("-SessionLeaseWaitSeconds", dest="session_lease_wait_seconds", type=int, default=120)
+    parser.add_argument("-SessionLeaseWaitSeconds", dest="session_lease_wait_seconds", type=int, default=30)
     parser.add_argument("-ResetPrimarySession", dest="reset_primary_session", action="store_true")
     parser.add_argument("-ResetParallelPool", dest="reset_parallel_pool", action="store_true")
-    parser.add_argument("-LockTimeoutSeconds", dest="lock_timeout_seconds", type=int, default=120)
+    parser.add_argument("-LockTimeoutSeconds", dest="lock_timeout_seconds", type=int, default=30)
     parser.add_argument("-LockPollMilliseconds", dest="lock_poll_milliseconds", type=int, default=500)
-    parser.add_argument("-MaxRetryCount", dest="max_retry_count", type=int_range_arg("MaxRetryCount", 0, 100), default=5)
+    parser.add_argument("-MaxRetryCount", dest="max_retry_count", type=int_range_arg("MaxRetryCount", 0, 100), default=1)
+    parser.add_argument("-ExecutionTimeoutSeconds", dest="execution_timeout_seconds", type=int_range_arg("ExecutionTimeoutSeconds", 1, 86400))
+    parser.add_argument("-SilentTimeoutSeconds", dest="silent_timeout_seconds", type=int_range_arg("SilentTimeoutSeconds", 1, 86400), default=600)
+    parser.add_argument("-HeartbeatSeconds", dest="heartbeat_seconds", type=int_range_arg("HeartbeatSeconds", 1, 3600), default=15)
+    parser.add_argument("-TrustedLocalFallback", dest="trusted_local_fallback", action="store_true")
     parser.add_argument("-BypassPermissions", dest="bypass_permissions", action="store_true")
     parser.add_argument("-DryRun", dest="dry_run", action="store_true")
 
@@ -78,6 +84,7 @@ def add_validate_task_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-TaskFile", dest="task_file", required=True)
     parser.add_argument("-Role", dest="role", type=choice_arg(list(WORKER_ROLES)), required=True)
     parser.add_argument("-ReviewForTaskId", dest="review_for_task_id")
+    parser.add_argument("-ReviewForRunId", dest="review_for_run_id")
     parser.add_argument("-ReviewKind", dest="review_kind", type=choice_arg(["spec", "quality"]))
     parser.add_argument("-Tests", dest="tests", action="append", default=[])
 
@@ -112,6 +119,20 @@ def build_parser() -> argparse.ArgumentParser:
     workflow.add_argument("-WorkflowId", dest="workflow_id", required=True)
     workflow.add_argument("-ArtifactRoot", dest="artifact_root")
     workflow.set_defaults(func=run_verify_workflow)
+
+    record_spawn = sub.add_parser("record-agent-spawn", allow_abbrev=False)
+    record_spawn.add_argument("-WorkflowId", dest="workflow_id", required=True)
+    record_spawn.add_argument("-TaskId", dest="task_id", required=True)
+    record_spawn.add_argument("-AgentId", dest="agent_id", required=True)
+    record_spawn.add_argument("-ArtifactRoot", dest="artifact_root")
+    record_spawn.set_defaults(func=run_record_agent_spawn)
+
+    record_close = sub.add_parser("record-agent-close", allow_abbrev=False)
+    record_close.add_argument("-WorkflowId", dest="workflow_id", required=True)
+    record_close.add_argument("-TaskId", dest="task_id", required=True)
+    record_close.add_argument("-AgentId", dest="agent_id", required=True)
+    record_close.add_argument("-ArtifactRoot", dest="artifact_root")
+    record_close.set_defaults(func=run_record_agent_close)
 
     chain = sub.add_parser("verify-chain", allow_abbrev=False)
     chain.add_argument("-ArtifactRoot", dest="artifact_root", required=True)
@@ -154,6 +175,20 @@ def build_parser() -> argparse.ArgumentParser:
 def run_ccviz_list(ns: argparse.Namespace) -> int:
     workflows = list_workflows(ns.artifact_root)
     render_list(workflows)
+    return 0
+
+
+def run_record_agent_spawn(ns: argparse.Namespace) -> int:
+    root = resolve_artifact_root(ns.artifact_root, workflow_id=ns.workflow_id)
+    path = record_agent_spawn(root, ns.workflow_id, ns.task_id, ns.agent_id)
+    print(f"Recorded agent spawn: {ns.agent_id} -> {path}")
+    return 0
+
+
+def run_record_agent_close(ns: argparse.Namespace) -> int:
+    root = resolve_artifact_root(ns.artifact_root, workflow_id=ns.workflow_id)
+    path = record_agent_close(root, ns.workflow_id, ns.task_id, ns.agent_id)
+    print(f"Recorded agent close: {ns.agent_id} -> {path}")
     return 0
 
 
