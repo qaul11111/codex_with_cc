@@ -500,6 +500,106 @@ def test_child_run_without_explicit_spawn_record_fails_closed() -> None:
         assert load_json(path)["finalAcceptance"]["status"] == "accepted"
 
 
+def test_canonical_spawn_handle_binds_to_child_thread_id() -> None:
+    with tempfile.TemporaryDirectory(prefix="codex_with_cc_agent_alias_") as tmp:
+        root = Path(tmp)
+        output = root / "report.md"
+        output.write_text(REPORT, encoding="utf-8")
+        workflow_runtime.record_agent_spawn(root, "wf-alias", "research", "/root/research_task")
+        workflow_runtime.update_workflow_record(
+            root,
+            "wf-alias",
+            "research",
+            "researcher",
+            [],
+            [],
+            [],
+            "run-1",
+            root / "config.json",
+            root / "status.json",
+            output,
+            root / "prompt.md",
+            root / "stream.jsonl",
+            root / "trace.log",
+            "completed",
+            codex_thread_id="019f-child-thread",
+        )
+
+        path = workflow_runtime.workflow_path(root, "wf-alias")
+        workflow = load_json(path)
+        assert set(workflow["agentAttempts"]) == {"/root/research_task"}
+        attempt = workflow["agentAttempts"]["/root/research_task"]
+        assert attempt["codexThreadId"] == "019f-child-thread"
+        assert attempt["runId"] == "run-1"
+        assert workflow["finalAcceptance"]["status"] == "pending-agent-close"
+
+        workflow_runtime.record_agent_close(root, "wf-alias", "research", "/root/research_task")
+
+        assert load_json(path)["finalAcceptance"]["status"] == "accepted"
+
+
+def test_canonical_spawn_handle_can_close_by_child_thread_alias() -> None:
+    with tempfile.TemporaryDirectory(prefix="codex_with_cc_agent_alias_close_") as tmp:
+        root = Path(tmp)
+        output = root / "report.md"
+        output.write_text(REPORT, encoding="utf-8")
+        workflow_runtime.record_agent_spawn(root, "wf-alias", "research", "/root/research_task")
+        workflow_runtime.update_workflow_record(
+            root,
+            "wf-alias",
+            "research",
+            "researcher",
+            [],
+            [],
+            [],
+            "run-1",
+            root / "config.json",
+            root / "status.json",
+            output,
+            root / "prompt.md",
+            root / "stream.jsonl",
+            root / "trace.log",
+            "completed",
+            codex_thread_id="019f-child-thread",
+        )
+
+        workflow_runtime.record_agent_close(root, "wf-alias", "research", "019f-child-thread")
+
+        path = workflow_runtime.workflow_path(root, "wf-alias")
+        assert load_json(path)["finalAcceptance"]["status"] == "accepted"
+
+
+def test_ambiguous_spawn_handles_do_not_guess_child_thread_alias() -> None:
+    with tempfile.TemporaryDirectory(prefix="codex_with_cc_agent_alias_ambiguous_") as tmp:
+        root = Path(tmp)
+        output = root / "report.md"
+        output.write_text(REPORT, encoding="utf-8")
+        workflow_runtime.record_agent_spawn(root, "wf-alias", "research", "/root/research_a")
+        workflow_runtime.record_agent_spawn(root, "wf-alias", "research", "/root/research_b")
+        workflow_runtime.update_workflow_record(
+            root,
+            "wf-alias",
+            "research",
+            "researcher",
+            [],
+            [],
+            [],
+            "run-1",
+            root / "config.json",
+            root / "status.json",
+            output,
+            root / "prompt.md",
+            root / "stream.jsonl",
+            root / "trace.log",
+            "completed",
+            codex_thread_id="019f-child-thread",
+        )
+
+        workflow = load_json(workflow_runtime.workflow_path(root, "wf-alias"))
+        assert "019f-child-thread" in workflow["agentAttempts"]
+        assert workflow["finalAcceptance"]["status"] == "pending-agent-spawn"
+
+
 def test_claude_cli_uses_role_routing_and_structured_output() -> None:
     args = new_claude_cli_args(
         "sonnet",

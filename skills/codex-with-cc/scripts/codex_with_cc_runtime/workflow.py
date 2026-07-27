@@ -284,16 +284,31 @@ def update_workflow_record(
         workflow.setdefault("runs", {})
         workflow.setdefault("agentAttempts", {})
         if codex_thread_id:
-            attempt = workflow["agentAttempts"].setdefault(
-                codex_thread_id,
-                {
-                    "agentId": codex_thread_id,
-                    "taskId": task_id,
-                    "spawnedAt": None,
-                    "spawnRecordedAt": None,
-                    "closeStatus": None,
-                },
-            )
+            attempts = workflow["agentAttempts"]
+            attempt = attempts.get(codex_thread_id)
+            if not isinstance(attempt, dict):
+                pending_handles = [
+                    candidate
+                    for candidate in attempts.values()
+                    if isinstance(candidate, dict)
+                    and candidate.get("taskId") == task_id
+                    and candidate.get("spawnRecordedAt")
+                    and not candidate.get("runId")
+                    and not candidate.get("codexThreadId")
+                ]
+                if len(pending_handles) == 1:
+                    attempt = pending_handles[0]
+                    attempt["codexThreadId"] = codex_thread_id
+                else:
+                    attempt = {
+                        "agentId": codex_thread_id,
+                        "taskId": task_id,
+                        "spawnedAt": None,
+                        "spawnRecordedAt": None,
+                        "closeStatus": None,
+                        "codexThreadId": codex_thread_id,
+                    }
+                    attempts[codex_thread_id] = attempt
             if attempt.get("taskId") not in (None, task_id):
                 raise DelegateError(f"agent {codex_thread_id} is already bound to task {attempt.get('taskId')}")
             attempt.update(
@@ -469,6 +484,14 @@ def record_agent_close(
         workflow = load_json(path)
         attempts = workflow.get("agentAttempts") if isinstance(workflow.get("agentAttempts"), dict) else {}
         attempt = attempts.get(agent_id)
+        if not isinstance(attempt, dict):
+            aliases = [
+                candidate
+                for candidate in attempts.values()
+                if isinstance(candidate, dict) and candidate.get("codexThreadId") == agent_id
+            ]
+            if len(aliases) == 1:
+                attempt = aliases[0]
         if not isinstance(attempt, dict):
             raise DelegateError(f"agent {agent_id} has no recorded spawn attempt")
         if attempt.get("taskId") != task_id:

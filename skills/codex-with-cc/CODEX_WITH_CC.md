@@ -139,6 +139,8 @@ python3 "<installed-workflow-root>/scripts/runtime.py" record-agent-close \
 
 Every non-fallback child run with `CODEX_THREAD_ID` requires explicit spawn and close records. Missing or unclosed attempts block final acceptance.
 
+Current collaboration hosts may return a canonical task handle such as `/root/<task-name>` from spawn while the child runtime exposes a UUID `CODEX_THREAD_ID`. The workflow runtime binds that handle to the UUID only when exactly one unbound spawn exists for the same TaskId; ambiguous candidates remain blocked for explicit resolution.
+
 ## Worker Output
 Claude Code must finish with these exact headings:
 
