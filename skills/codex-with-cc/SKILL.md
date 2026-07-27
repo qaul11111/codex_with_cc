@@ -36,7 +36,7 @@ Use this workflow as a Superpowers-style staged control loop, not as a prompt sh
 1. Design gate: clarify intent, constraints, success criteria, and acceptance evidence before dispatch.
 2. Plan gate: split work into bounded task files with `Goal`, `Allowed Scope`, `Forbidden Actions`, `Acceptance Criteria`, `Verification`, and `Report Requirements`.
 3. Task validation gate: run `validate_delegate_task.*` when preparing task files or when scope/review metadata is easy to get wrong.
-4. Dispatch gate: use fresh child threads that inherit the main-thread model and reasoning effort; omit the field or set `fork_context: false`.
+4. Dispatch gate: use fresh child threads that inherit the main-thread model and reasoning effort; use `fork_context: false` or the host equivalent `fork_turns: "none"`.
 5. Implementer gate: require test-first or verification-first evidence when changing behavior.
 6. Review gate: review every implementation in two passes, spec compliance first, then code quality and regression risk.
 7. Final-verifier gate: finish only after workflow-level verification confirms run artifacts, workflow artifacts, accepted review gates, final-verifier evidence, parallel scope safety, session continuity when relevant, and repository tests support acceptance.

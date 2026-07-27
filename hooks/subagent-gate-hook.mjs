@@ -12,6 +12,7 @@ const FALLBACK_CONTRACT = {
     reasoningEffort: "",
     reasoningEffortPolicy: "inherit_parent",
     forkContext: false,
+    forkTurns: "none",
   },
   provenance: {
     hostTranscriptFields: ["transcript_path", "transcriptPath"],
@@ -43,7 +44,7 @@ const ROUTING_CONTEXT = [
   "- Read the codex-with-cc skill only when delegation is requested; do not inject the full contract repeatedly.",
   "- Spawn every independent task before waiting. Wait on all active agent ids together and process whichever finishes first.",
   "- record every spawned agent id, bind reviews to the exact implementer run, and close every agent attempt.",
-  "- Child spawn metadata inherits the main-thread model and reasoning effort; fork_context may be omitted or false.",
+  "- Child spawn metadata inherits the main-thread model and reasoning effort; use fork_context=false or fork_turns=none, depending on the host schema.",
   "- The child must set CODEX_CLAUDE_CHILD_THREAD=1 and call delegate_to_claude.* with -TaskFile, -WorkflowId, -TaskId, -Role, and -SessionKey.",
   "- Implementer workflows require current spec review, quality review, and final-verifier acceptance. Dry runs never count as acceptance.",
 ].join("\n");
@@ -102,6 +103,7 @@ const REQUIRED_MODEL_POLICY = CONTRACT.spawn.modelPolicy || (REQUIRED_MODEL ? "f
 const REQUIRED_EFFORT = CONTRACT.spawn.reasoningEffort;
 const REQUIRED_EFFORT_POLICY = CONTRACT.spawn.reasoningEffortPolicy || (REQUIRED_EFFORT ? "fixed" : "inherit_parent");
 const REQUIRED_FORK_CONTEXT = CONTRACT.spawn.forkContext;
+const REQUIRED_FORK_TURNS = CONTRACT.spawn.forkTurns || "none";
 const CHILD_MARKER_NAME = CONTRACT.childThread.markerName;
 const CHILD_MARKER_VALUE = CONTRACT.childThread.markerValue;
 const ALLOWED_ROLES = new Set(CONTRACT.workerRoles.map((role) => String(role).toLowerCase()));
@@ -224,6 +226,14 @@ function isWorkflowSpawnToolName(toolName) {
   const normalized = String(toolName || "").toLowerCase();
   const tail = toolNameTail(normalized);
   return SPAWN_TOOL_NAMES.has(normalized) || SPAWN_TOOL_NAMES.has(tail) || normalized.includes("spawn_agent") || normalized.includes("subagent");
+}
+
+function isOpaqueCollaborationSpawn(toolName, payload) {
+  const normalized = String(toolName || "").toLowerCase();
+  const message = prop(payload, "message", "message");
+  return normalized.includes("collaborationspawn_agent")
+    && typeof message === "string"
+    && /^gAAAAA[A-Za-z0-9_-]{80,}={0,2}$/.test(message);
 }
 
 function nestedToolUses(toolInput) {
@@ -489,7 +499,7 @@ function modelRequirementReason() {
   return `model must be ${REQUIRED_MODEL}`;
 }
 
-function validateWorkflowPayload(payload) {
+function validateWorkflowPayload(payload, toolName = "") {
   const serialized = stringify(payload);
   const problems = [];
 
@@ -512,6 +522,18 @@ function validateWorkflowPayload(payload) {
   if (forkContext !== undefined && !isFalse(forkContext)) {
     problems.push("fork_context: false is required");
   }
+  const forkTurns = prop(payload, "fork_turns", "forkTurns");
+  if (forkTurns !== undefined && String(forkTurns).toLowerCase() !== REQUIRED_FORK_TURNS) {
+    problems.push(`fork_turns: "${REQUIRED_FORK_TURNS}" is required`);
+  }
+
+  // Codex 0.145+ encrypts collaboration child prompts before PreToolUse.
+  // The hook can still enforce spawn metadata, while runtime artifacts prove
+  // the child marker, delegate invocation, task metadata, and lifecycle.
+  if (isOpaqueCollaborationSpawn(toolName, payload)) {
+    return problems;
+  }
+
   if (hasDirectClaudeCommand(serialized)) {
     problems.push("direct Claude CLI execution is forbidden");
   }
@@ -570,7 +592,7 @@ function handlePreToolUse(input) {
     if (!isWorkflowSpawnToolName(name)) {
       continue;
     }
-    const problems = validateWorkflowPayload(nestedToolInput(item));
+    const problems = validateWorkflowPayload(nestedToolInput(item), name);
     if (problems.length > 0) {
       nestedProblems.push(`nested ${name}: ${problems.join("; ")}`);
     }
@@ -636,7 +658,7 @@ function handlePreToolUse(input) {
     return;
   }
 
-  const problems = validateWorkflowPayload(toolInput);
+  const problems = validateWorkflowPayload(toolInput, toolName);
   if (problems.length > 0) {
     writeJson(deny(`codex-with-cc platform gate blocked ${toolName}: ${problems.join("; ")}.`));
   }

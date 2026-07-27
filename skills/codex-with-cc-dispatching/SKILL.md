@@ -9,7 +9,7 @@ Read `../codex-with-cc/CODEX_WITH_CC.md` before dispatching. Use this skill afte
 
 Dispatch rules:
 
-- Every child thread inherits the main-thread model and reasoning effort; omit `fork_context` or set it to `false`.
+- Every child thread inherits the main-thread model and reasoning effort; use `fork_context: false` or the host equivalent `fork_turns: "none"`.
 - Every worker command sets `CODEX_CLAUDE_CHILD_THREAD=1`.
 - Every worker command passes `-TaskFile`, `-WorkflowId`, `-TaskId`, `-Role`, and `-SessionKey`.
 - Run `validate_delegate_task.*` before dispatch when the task file was generated, contains reviewer metadata, or carries explicit `-Tests` commands.

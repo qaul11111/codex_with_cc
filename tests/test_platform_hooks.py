@@ -192,6 +192,56 @@ def test_pre_tool_use_allows_compliant_spawn_agent_payload_with_runner_descripti
     assert output == {}
 
 
+def test_pre_tool_use_allows_encrypted_collaboration_spawn_metadata() -> None:
+    output = run_hook(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "collaborationspawn_agent",
+            "tool_input": {
+                "task_name": "smoke_task",
+                "fork_turns": "none",
+                "message": "gAAAAA" + ("A" * 120),
+            },
+        }
+    )
+
+    assert output == {}
+
+
+def test_pre_tool_use_denies_encrypted_collaboration_spawn_with_forked_turns() -> None:
+    output = run_hook(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "collaborationspawn_agent",
+            "tool_input": {
+                "task_name": "smoke_task",
+                "fork_turns": "all",
+                "message": "gAAAAA" + ("A" * 120),
+            },
+        }
+    )
+    reason = hook_specific(output)["permissionDecisionReason"]
+
+    assert 'fork_turns: "none" is required' in reason
+
+
+def test_pre_tool_use_keeps_validating_readable_collaboration_spawn_messages() -> None:
+    output = run_hook(
+        {
+            "hook_event_name": "PreToolUse",
+            "tool_name": "collaborationspawn_agent",
+            "tool_input": {
+                "task_name": "smoke_task",
+                "fork_turns": "none",
+                "message": "Use a normal worker.",
+            },
+        }
+    )
+    reason = hook_specific(output)["permissionDecisionReason"]
+
+    assert "delegate_to_claude" in reason
+
+
 def test_pre_tool_use_denies_direct_claude_shell_command() -> None:
     output = run_hook(
         {

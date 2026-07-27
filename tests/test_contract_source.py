@@ -103,6 +103,7 @@ def test_contract_json_is_single_source_for_runtime_constants() -> None:
     assert contract["spawn"]["reasoningEffort"] == ""
     assert contract["spawn"]["reasoningEffortPolicy"] == "inherit_parent"
     assert contract["spawn"]["forkContext"] is False
+    assert contract["spawn"]["forkTurns"] == "none"
     assert "delegateEntrypointPatterns" in contract
     assert contract["delegateEntrypointPattern"] in contract["delegateEntrypointPatterns"]
     assert "-Task" in contract["legacy"]["forbiddenArgs"]

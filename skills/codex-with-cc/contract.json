@@ -11,7 +11,8 @@
     "modelPolicy": "inherit_parent",
     "reasoningEffort": "",
     "reasoningEffortPolicy": "inherit_parent",
-    "forkContext": false
+    "forkContext": false,
+    "forkTurns": "none"
   },
   "provenance": {
     "hostTranscriptFields": [
