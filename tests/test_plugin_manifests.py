@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import json
+import os
 import subprocess
 
 
@@ -19,10 +20,17 @@ def test_plugin_manifest_and_docs_contract() -> None:
 
     codex_plugin = json.loads(codex_plugin_path.read_text(encoding="utf-8"))
     assert codex_plugin["name"] == "codex-with-cc"
-    assert codex_plugin["version"] == "1.1.2"
+    assert codex_plugin["version"] == "1.2.0"
     assert codex_plugin["skills"] == "./skills/"
     assert "hooks" not in codex_plugin
     assert (repo / "hooks" / "hooks.json").exists()
+    rules_example = repo / "examples" / "exec-policy.example.rules"
+    assert rules_example.exists()
+    assert not (repo / "examples" / "exec-policy.example.json").exists()
+    rules_text = rules_example.read_text(encoding="utf-8")
+    assert 'prefix_rule(pattern=["/bin/zsh", "-c",' in rules_text
+    assert 'prefix_rule(pattern=["/bin/zsh", "-c"],' not in rules_text
+    assert 'prefix_rule(pattern=["/Users/example/.codex/bin/' not in rules_text
 
     codex_interface = codex_plugin["interface"]
     assert codex_interface["displayName"] == "Codex With CC"
@@ -53,8 +61,9 @@ def test_macos_scripts_keep_executable_git_mode() -> None:
 
     for script in scripts:
         rel = script.relative_to(repo).as_posix()
+        assert os.access(script, os.X_OK), f"{script} must be executable"
         result = subprocess.run(
-            ["git", "ls-tree", "HEAD", rel],
+            ["git", "ls-files", "--stage", rel],
             cwd=repo,
             text=True,
             capture_output=True,

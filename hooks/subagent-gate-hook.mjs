@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,11 +42,12 @@ const ROUTING_CONTEXT = [
   "codex-with-cc platform subagent gate:",
   "- Any child-agent, subagent, child-thread, delegation, worker-execution, 子代理, 子线程, 多代理, 委派, 派工, or 执行层 request must use the codex-with-cc workflow.",
   "- Required chain: Codex main thread -> Codex spawn_agent child thread -> delegate_to_claude.* -> Claude Code CLI.",
+  "- Preferred macOS child command: use the literal fixed launcher path under CODEX_HOME/bin with no arguments and set the terminal working directory to the per-attempt launch.json directory.",
   "- Read the codex-with-cc skill only when delegation is requested; do not inject the full contract repeatedly.",
   "- Spawn every independent task before waiting. Wait on all active agent ids together and process whichever finishes first.",
   "- record every spawned agent id, bind reviews to the exact implementer run, and close every agent attempt.",
   "- Child spawn metadata inherits the main-thread model and reasoning effort; use fork_context=false or fork_turns=none, depending on the host schema.",
-  "- The child must set CODEX_CLAUDE_CHILD_THREAD=1 and call delegate_to_claude.* with -TaskFile, -WorkflowId, -TaskId, -Role, and -SessionKey.",
+  "- The fixed launcher sets CODEX_CLAUDE_CHILD_THREAD=1 and reconstructs the delegate arguments from launch.json; the legacy entrypoint still requires the marker plus -TaskFile, -WorkflowId, -TaskId, -Role, and -SessionKey.",
   "- Implementer workflows require current spec review, quality review, and final-verifier acceptance. Dry runs never count as acceptance.",
 ].join("\n");
 
@@ -263,8 +265,49 @@ function hasDelegateEntrypoint(serialized) {
   return DELEGATE_ENTRYPOINT_PATTERNS.some((pattern) => pattern.test(serialized));
 }
 
-function isReadOnlyInspectionCommand(serialized) {
-  return /^\s*(?:rg|grep|findstr|select-string|get-content|cat|type|git\s+show|git\s+grep)\b/i.test(serialized);
+function canonicalLauncherPath() {
+  const configured = String(process.env.CODEX_HOME || "").trim();
+  const codexHome = configured
+    ? path.resolve(configured)
+    : path.join(os.homedir(), ".codex");
+  return path.join(codexHome, "bin", "codex-with-cc-launch");
+}
+
+const CANONICAL_LAUNCHER = canonicalLauncherPath();
+
+function isFixedLauncherShellCommand(command) {
+  const cmd = String(command || "");
+  return cmd === CANONICAL_LAUNCHER
+    || cmd === `/bin/zsh -c "${CANONICAL_LAUNCHER}"`;
+}
+
+function hasAppRecordedLauncher(command) {
+  return /\bcodex-with-cc-launch\b/.test(String(command || ""));
+}
+
+function isReadOnlyInspectionCommand(command) {
+  const segments = shellCommandSegments(command);
+  if (segments.length !== 1 || segments[0].length === 0) {
+    return false;
+  }
+  const tokens = segments[0].map(unquoteShellToken);
+  const executable = shellBasename(tokens[0]);
+  if (["rg", "grep", "findstr", "select-string", "get-content", "cat", "type", "head", "tail", "nl", "wc"].includes(executable)) {
+    return true;
+  }
+  if (executable === "sed") {
+    return !tokens.some((token) => token === "-i" || token.startsWith("-i") || token === "--in-place");
+  }
+  if (executable === "git") {
+    const subcommand = tokens.find((token, index) => index > 0 && !token.startsWith("-")) || "";
+    return ["show", "grep", "diff", "status", "log"].includes(subcommand);
+  }
+  return false;
+}
+
+function hasFixedLauncherSpawnReference(serialized) {
+  const text = String(serialized || "");
+  return text.includes(CANONICAL_LAUNCHER) && /\blaunch\.json\b/i.test(text);
 }
 
 function hasTaskFile(serialized) {
@@ -537,6 +580,9 @@ function validateWorkflowPayload(payload, toolName = "") {
   if (hasDirectClaudeCommand(serialized)) {
     problems.push("direct Claude CLI execution is forbidden");
   }
+  if (hasFixedLauncherSpawnReference(serialized)) {
+    return problems;
+  }
   if (!hasChildMarker(serialized)) {
     problems.push("CODEX_CLAUDE_CHILD_THREAD=1 is required");
   }
@@ -610,7 +656,15 @@ function handlePreToolUse(input) {
       problems.push("direct Claude CLI execution is forbidden");
     }
 
-    if (hasDelegateEntrypoint(serialized) && !isReadOnlyInspectionCommand(shellCommand)) {
+    if (isFixedLauncherShellCommand(shellCommand)) {
+      // The stable launcher accepts no arguments; it reads launch.json from
+      // its working directory. No further argument-level checks required.
+    } else if (hasAppRecordedLauncher(shellCommand) && !isReadOnlyInspectionCommand(shellCommand)) {
+      // A command mentions the launcher but is not one of the exact allowed
+      // shapes (e.g. arguments appended, wrong path, same-basename attack).
+      // Deny to keep command stability.
+      problems.push("codex-with-cc-launch must take no arguments and use a stable command shape");
+    } else if (hasDelegateEntrypoint(serialized) && !isReadOnlyInspectionCommand(shellCommand)) {
       if (!hasChildMarker(serialized)) {
         problems.push("CODEX_CLAUDE_CHILD_THREAD=1 is required");
       }

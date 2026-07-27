@@ -185,8 +185,107 @@ Use `verify_delegate_run.*` or `verify_delegate_artifacts.*` for each run, `veri
 
 `<installed-workflow-root>` means the installed `skills/codex-with-cc` directory, for example `<codex-home>/plugins/cache/aiskyhub/codex-with-cc/<version-or-hash>/skills/codex-with-cc`. Do not use the package root `<version-or-hash>` directory.
 
-## Standard Worker Command
-Normally run this inside a Codex child thread. If the Codex sandbox or delegated runner cannot execute it, use the trusted local terminal fallback above.
+## Fixed Launcher (macOS 1.2.0+)
+
+Codex App approval works best with a single stable command that takes no arguments. The fixed launcher uses a versioned `launch.json` descriptor placed in one directory per child attempt.
+
+### Install the stable launcher
+
+```bash
+"<installed-workflow-root>/macos_scripts/install-codex-with-cc-launch.sh"
+```
+
+This writes the no-argument executable `${CODEX_HOME:-$HOME/.codex}/bin/codex-with-cc-launch`. The file is idempotent: rerunning the installer overwrites it with the current `<installed-workflow-root>`. Keep the launcher on a user-writable path and ensure it is executable.
+
+### Prepare a descriptor directory
+
+For each child thread attempt, create a dedicated directory containing `launch.json`. Do not share descriptor directories across concurrent attempts; use one directory per `TaskId`/`RunId`.
+
+```bash
+launch_dir="./.codex/codex_with_cc/launcher-runs/<workflow-id>/<task-id>/<run-id>"
+mkdir -p "$launch_dir"
+cat > "$launch_dir/launch.json" <<'JSON'
+{
+  "version": "1.2.0",
+  "invocation": "codex_with_cc_workflow",
+  "childThread": {
+    "threadId": "<CODEX_THREAD_ID of this child thread>"
+  },
+  "projectWorkingDirectory": "<absolute project root>",
+  "taskFile": "./.codex/codex_with_cc/tasks/<yyyyMMdd>/<HHmmssfff>-<short-id>-<task>.md",
+  "workflowId": "<workflow-id>",
+  "taskId": "<task-id>",
+  "role": "implementer",
+  "sessionKey": "<stable-session-key>",
+  "scope": ["<changed-or-inspected-path>"],
+  "tests": ["pytest -q"],
+  "session": {
+    "sessionMode": "PrimaryReuse",
+    "allowParallel": false
+  },
+  "bypassPermissions": true
+}
+JSON
+```
+
+### Invoke the stable launcher
+
+The terminal tool sets the descriptor directory as its working directory, then executes the exact literal no-argument launcher command:
+
+```bash
+/Users/<user>/.codex/bin/codex-with-cc-launch
+```
+
+Codex App normally records that terminal command as argv `["/bin/zsh", "-c", "/Users/<user>/.codex/bin/codex-with-cc-launch"]`. Do not put an additional `zsh -c` wrapper in the terminal tool command.
+
+The launcher:
+
+- Accepts **no command-line arguments**.
+- Sets `CODEX_CLAUDE_CHILD_THREAD=1`.
+- Requires `CODEX_THREAD_ID` to match `childThread.threadId` during normal child execution. An explicit `trustedLocalFallback: true` descriptor maps to `-TrustedLocalFallback` and is the only way to bypass equality.
+- Validates the descriptor schema, required fields, unknown sub-fields, list element types, role, review metadata, session mode, integer ranges, and boolean types.
+- Verifies that the descriptor directory and `launch.json` are owned by the current user and not group/other writable, with no symlinks in any path component.
+- Requires `projectWorkingDirectory` to be absolute, existing, owned by the current user, not group/other writable, and symlink-free.
+- Requires `taskFile` to be relative, reject `..`, resolve inside `projectWorkingDirectory`, and reject absolute/symlinked task paths.
+- Claims the descriptor atomically with a `claimed` file (owner-only, `0o600`); a second run in the same directory fails.
+- Executes the existing `delegate_to_claude.py` runtime inside `projectWorkingDirectory`.
+
+### Exact narrow Codex exec-policy example
+
+Use this `.rules` example in the Codex App to approve only the stable launcher with no arguments. Do **not** add this rule to the user's live config automatically; document it and let the user enable it.
+
+```starlark
+prefix_rule(pattern=["/bin/zsh", "-c", "/Users/<user>/.codex/bin/codex-with-cc-launch"], decision="allow")
+```
+
+See `examples/exec-policy.example.rules`. Only allow the three-element App-recorded argv. Do not add a one-element launcher `prefix_rule`, because prefix rules also match commands with later arguments.
+
+### Concurrency and isolation
+
+- Use one descriptor directory per child attempt.
+- Do not write a global "current" pointer file that multiple attempts update.
+- The atomic `claimed` file prevents accidental double execution of the same descriptor.
+- Parallel tasks keep independent directories, independent artifacts, and independent `CODEX_THREAD_ID` values.
+
+### Upgrade and rollback
+
+- Upgrade: run `install-codex-with-cc-launch.sh` from the new plugin version. The launcher resolves the new workflow root on its next invocation.
+- Rollback: overwrite `${CODEX_HOME:-$HOME/.codex}/bin/codex-with-cc-launch` with the previous version's launcher, or remove the file and reinstall from the desired plugin version.
+- Do not delete old launcher versions from under running child threads.
+
+### Security boundaries
+
+- The launcher must not accept command-line arguments or environment variables that override descriptor fields.
+- Descriptor directories and `launch.json` are verified for ownership (current user) and mode (no group/other write).
+- No symlinks in `projectWorkingDirectory`, `taskFile`, or any unresolved path component.
+- The launcher validates that `projectWorkingDirectory` is writable and `taskFile` is readable.
+- `taskFile` must be relative and resolve inside `projectWorkingDirectory`; absolute, `..`, and escaped paths are rejected.
+- Only an explicit `trustedLocalFallback: true` skips the `CODEX_THREAD_ID` equality check; it maps to the existing runtime fallback flag and still requires a valid task file and descriptor schema.
+- The installer writes atomically, checks ownership of `CODEX_HOME` and `CODEX_HOME/bin`, and embeds the current `sys.executable`.
+
+## Standard Worker Command (legacy argument-based entrypoint)
+
+The argument-based delegate scripts remain supported for backwards compatibility. New integrations should prefer the fixed launcher.
 
 Windows:
 

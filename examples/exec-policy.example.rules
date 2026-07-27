@@ -1,0 +1,3 @@
+# Replace /Users/example with the literal home path used by this Codex install.
+# This matches one exact App-recorded argv and does not allow arbitrary zsh -c.
+prefix_rule(pattern=["/bin/zsh", "-c", "/Users/example/.codex/bin/codex-with-cc-launch"], decision="allow")

@@ -162,7 +162,58 @@ codex_hooks = true
 
 不要把 `<version-or-hash>` 包根目录当成 workflow 根目录；`contract.json`、`scripts`、`windows_scripts` 和 `macos_scripts` 都在 `skills/codex-with-cc` 下面。
 
-### 6. 安装后自检
+### 6. 安装固定启动器（macOS 1.2.0+）
+
+Codex App 审批更适合使用一个无参数的固定命令。macOS 下安装一次：
+
+```bash
+"<installed-workflow-root>/macos_scripts/install-codex-with-cc-launch.sh"
+```
+
+这会写入 `${CODEX_HOME:-$HOME/.codex}/bin/codex-with-cc-launch`，安装是幂等的，重复执行会覆盖为当前 workflow 根目录。
+
+为每个子代理尝试创建一个独立的描述目录，并放入 `launch.json`：
+
+```bash
+launch_dir="./.codex/codex_with_cc/launcher-runs/<workflow-id>/<task-id>/<run-id>"
+mkdir -p "$launch_dir"
+cat > "$launch_dir/launch.json" <<'JSON'
+{
+  "version": "1.2.0",
+  "invocation": "codex_with_cc_workflow",
+  "childThread": {
+    "threadId": "<CODEX_THREAD_ID>"
+  },
+  "projectWorkingDirectory": "<absolute project root>",
+  "taskFile": "./.codex/codex_with_cc/tasks/<yyyyMMdd>/<HHmmssfff>-<short-id>-<task>.md",
+  "workflowId": "<workflow-id>",
+  "taskId": "<task-id>",
+  "role": "implementer",
+  "sessionKey": "<stable-session-key>",
+  "scope": ["<changed-or-inspected-path>"],
+  "tests": ["pytest -q"],
+  "session": {
+    "sessionMode": "PrimaryReuse",
+    "allowParallel": false
+  },
+  "bypassPermissions": true
+}
+JSON
+```
+
+终端工具将该描述目录设为工作目录，并执行同一个逐字无参命令：
+
+```bash
+/Users/<user>/.codex/bin/codex-with-cc-launch
+```
+
+Codex App 通常会把它记录成 argv `["/bin/zsh", "-c", "/Users/<user>/.codex/bin/codex-with-cc-launch"]`。不要在终端工具命令里再套一层 `zsh -c`，也不要使用 `$HOME`。
+
+启动器不接受任何命令行参数，会从当前工作目录读取 `launch.json`，设置 `CODEX_CLAUDE_CHILD_THREAD=1`，校验描述符安全性（所有者、mode、无符号链接）、线程绑定和路径，并原子 claim 后运行既有 runtime。每个描述目录只能被原子地 claim 一次（owner-only mode），不能并发复用。
+
+要在 Codex App 中配置允许的精确命令，可参考 `examples/exec-policy.example.rules`，但不要自动把它写到用户当前生效配置里。
+
+### 7. 安装后自检
 
 如果已经能定位 `<installed-workflow-root>`，优先执行插件自带自检。自检失败时直接报告失败，不回退到复制文件或旧安装脚本。
 
@@ -284,6 +335,7 @@ dry-run 成功后，默认应能在当前项目看到 `.codex/codex_with_cc/clau
 - 是否清理了用户级旧版 `codex-with-cc` skill。
 - `codex-with-cc@aiskyhub` 是否已经安装或更新完成。
 - 是否运行了 runtime/session-pool 自检和 dry-run 委派验证。
+- 如为 macOS 1.2.0+ 是否安装了固定启动器 `codex-with-cc-launch` 并验证其 dry-run 描述目录流程。
 - 是否需要用户执行 `/plugin install codex-with-cc@aiskyhub --scope user`。
 - 是否需要用户重载插件列表或重启 Codex。
 - 如果有步骤没执行，必须说明阻塞原因。

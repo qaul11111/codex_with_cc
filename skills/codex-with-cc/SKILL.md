@@ -29,6 +29,8 @@ Codex main thread -> Codex spawn_agent child thread -> delegate_to_openai_compat
 
 The installed plugin also declares `./hooks/hooks.json` so Codex hosts with hooks enabled can inject this contract at session start, reinforce it on matching user prompts, and deny supported non-compliant tool calls.
 
+Fixed-launcher shortcut (macOS 1.2.0+): install `codex-with-cc-launch` with `<installed-workflow-root>/macos_scripts/install-codex-with-cc-launch.sh`, prepare one descriptor directory per child attempt with a `launch.json`, set that directory as the terminal tool working directory, and run the literal `/Users/<user>/.codex/bin/codex-with-cc-launch` command (no `$HOME`, no extra args, no chaining, and no extra `zsh -c` wrapper in the tool command). The launcher takes no arguments, validates the descriptor schema and safety, verifies thread binding, and delegates to the existing runtime.
+
 ## Operating Method
 
 Use this workflow as a Superpowers-style staged control loop, not as a prompt shortcut:
