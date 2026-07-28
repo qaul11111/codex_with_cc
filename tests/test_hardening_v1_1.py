@@ -18,6 +18,7 @@ REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "skills" / "codex-with-cc" / "scripts"
 HOOK_SCRIPT = REPO / "hooks" / "subagent-gate-hook.mjs"
 DELEGATE = SCRIPTS / "delegate_to_claude.py"
+SESSION_POOL_SELFTEST = SCRIPTS / "test_delegate_session_pool.py"
 VERIFY_WORKFLOW = SCRIPTS / "verify_delegate_workflow.py"
 sys.path.insert(0, str(SCRIPTS))
 
@@ -149,6 +150,13 @@ def test_session_context_is_compact_and_not_reinjected_in_full() -> None:
     assert "Below is the full content" not in context
     assert "record every spawned agent id" in context
     assert "close every agent attempt" in context
+
+
+def test_delegate_session_pool_selftest_uses_hashed_state_path() -> None:
+    result = run_python(SESSION_POOL_SELFTEST)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "delegate session pool tests passed" in result.stdout
 
 
 def test_parallel_workflow_updates_do_not_lose_tasks(monkeypatch) -> None:

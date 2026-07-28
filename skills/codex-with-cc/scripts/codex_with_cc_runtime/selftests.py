@@ -17,7 +17,7 @@ from .io_utils import load_json, read_text, write_json, write_text
 from .paths import repo_root, runtime_python_root
 from .real_chain import run_real_chain_validation
 from .reports import text_has_required_report_headings
-from .sessions import acquire_session_lease, release_session_lease, reset_session_lease_for_fresh_session
+from .sessions import acquire_session_lease, release_session_lease, reset_session_lease_for_fresh_session, safe_session_key
 from .workflow import workflow_path
 
 
@@ -526,6 +526,8 @@ def run_test_session_pool(_: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="codex_with_cc_delegate_session_pool_") as tmp:
         temp_root = Path(tmp)
         session_key = "session-pool-test"
+        session_state_path = temp_root / "session-pools" / f"{safe_session_key(session_key)}.json"
+        session_state_lock_path = temp_root / "session-pools" / f"{safe_session_key(session_key)}.lock"
         first = run_delegate_subprocess(
             [
                 *delegate_task_args(temp_root, "serial-a", "serial A"),
@@ -540,7 +542,7 @@ def run_test_session_pool(_: argparse.Namespace) -> int:
             env={CHILD_MARKER_NAME: "1"},
         )
         assert_equal(first.returncode, 0, "first-primary-dryrun-succeeds")
-        state = load_json(temp_root / "session-pools" / f"{session_key}.json")
+        state = load_json(session_state_path)
         primary_id = str(state["primary"]["sessionId"])
         assert_true("--session-id " + primary_id in first.stdout, "first-primary-uses-session-id")
         assert_equal(state["primary"]["status"], "available", "primary-released-after-dry-run")
@@ -559,7 +561,7 @@ def run_test_session_pool(_: argparse.Namespace) -> int:
             env={CHILD_MARKER_NAME: "1"},
         )
         assert_equal(anchor.returncode, 0, "anchor-dryrun-succeeds")
-        state = load_json(temp_root / "session-pools" / f"{session_key}.json")
+        state = load_json(session_state_path)
         assert_equal(state["primary"]["sessionId"], primary_id, "anchor-keeps-primary-id")
         assert_true("--resume " + primary_id in anchor.stdout, "anchor-resumes-primary")
         parallel_a = run_delegate_subprocess(
@@ -577,7 +579,7 @@ def run_test_session_pool(_: argparse.Namespace) -> int:
             env={CHILD_MARKER_NAME: "1"},
         )
         assert_equal(parallel_a.returncode, 0, "parallel-a-dryrun-succeeds")
-        state = load_json(temp_root / "session-pools" / f"{session_key}.json")
+        state = load_json(session_state_path)
         pool_id = str(state["parallelPool"][0]["sessionId"])
         assert_true("--session-id " + pool_id in parallel_a.stdout, "first-parallel-uses-session-id")
         parallel_b = run_delegate_subprocess(
@@ -595,12 +597,12 @@ def run_test_session_pool(_: argparse.Namespace) -> int:
             env={CHILD_MARKER_NAME: "1"},
         )
         assert_equal(parallel_b.returncode, 0, "parallel-b-dryrun-succeeds")
-        state = load_json(temp_root / "session-pools" / f"{session_key}.json")
+        state = load_json(session_state_path)
         assert_equal(len(state["parallelPool"]), 1, "parallel-pool-reuses-available-id")
         assert_true("--resume " + pool_id in parallel_b.stdout, "second-parallel-resumes-pool-id")
         lease = acquire_session_lease(
-            temp_root / "session-pools" / f"{session_key}.json",
-            temp_root / "session-pools" / f"{session_key}.lock",
+            session_state_path,
+            session_state_lock_path,
             session_key,
             "PrimaryReuse",
             "fresh-reset-run",
@@ -611,8 +613,8 @@ def run_test_session_pool(_: argparse.Namespace) -> int:
             False,
         )
         reset = reset_session_lease_for_fresh_session(
-            temp_root / "session-pools" / f"{session_key}.json",
-            temp_root / "session-pools" / f"{session_key}.lock",
+            session_state_path,
+            session_state_lock_path,
             session_key,
             lease,
             "fresh-reset-run",
@@ -622,8 +624,8 @@ def run_test_session_pool(_: argparse.Namespace) -> int:
         assert_true(not reset.resume, "fresh-reset-returns-non-resume-lease")
         assert_true(reset.session_id != lease.session_id, "fresh-reset-changes-session-id")
         release_session_lease(
-            temp_root / "session-pools" / f"{session_key}.json",
-            temp_root / "session-pools" / f"{session_key}.lock",
+            session_state_path,
+            session_state_lock_path,
             session_key,
             reset,
             "fresh-reset-run",
