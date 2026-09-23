@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .contract import load_contract
+from .common import ContractError
 
 
 @dataclass(frozen=True)
@@ -18,8 +19,12 @@ def route_for_task(
     complexity: str = "normal",
     available_models: set[str] | None = None,
 ) -> ModelRoute:
+    if complexity not in {"simple", "normal", "complex", "high-risk"}:
+        raise ContractError("Unsupported complexity")
     contract = load_contract()
     profile = contract["roleProfiles"][role]
+    if role == "researcher" and complexity == "complex":
+        profile = "balanced"
     if role == "implementer" and complexity in {"complex", "high-risk"}:
         profile = "balancedHigh"
     if role in {"planner", "reviewer"} and complexity == "normal":

@@ -1,29 +1,43 @@
 ---
 name: codex-native-agents
-description: Use for explicit child-agent, subagent, child-thread, delegation, worker-execution, or multi-agent requests; route bounded work through native Codex agents and the codex_native_agents_workflow contract.
+description: Optimize authorized development work by choosing main-thread execution or bounded native Astra subagents according to task independence, complexity, risk and parallelism; use for explicit delegation and substantial development tasks that benefit from coordination.
 ---
 
 # Codex Native Agents
 
-## Core Rule
+The main thread owns dispatch, architecture, scope, acceptance, and delivery.
+Within an authorized development task, the main thread may choose native
+subagents without asking for delegation permission again. This skill authorizes
+that implementation choice only; preserve explicit user limits and host policy.
+Workers cannot call `spawn_agent` recursively or expand the assignment.
 
-Use this skill for explicit delegation work. The main thread owns dispatch,
-architecture, task boundaries, review decisions, acceptance, and final delivery.
-Workers are context consumers and cannot call `spawn_agent` recursively.
+## Decide before creating artifacts
 
-Read `CODEX_NATIVE_AGENTS.md` and `contract.json` before dispatching work.
-The contract is the shared source for roles, model profiles, task files, reports,
-review gates, and delegation triggers.
+- Keep small fixes, uncertain design choices, tightly coupled edits and short
+  investigations in main. Complexity alone does not justify delegation.
+- Delegate a bounded task when an independent worker can make progress while
+  main does useful work and the expected benefit exceeds dispatch/review cost.
+- Parallelize independent tasks only after mapping dependencies and all files
+  they may read/write. Multiple readers may share scope. A writer conflicts
+  with readers and writers in its scope. Serialize shared indexes, lockfiles,
+  generated catalogs and integration changes under one owner.
+- Default to standard acceptance: main reviews the actual diff and executes
+  relevant checks. Choose strict before dispatch for high-risk changes or
+  explicitly requested independent reviews. Do not downgrade a running workflow.
+- Use Astra low for simple investigation, medium for ordinary work, high for
+  complex work/review, xhigh for the hardest judgement and final verification.
+  If the advertised route is unavailable, keep work in main or explicitly replan;
+  do not silently switch to another model. One failed attempt may escalate one
+  profile with a fresh preparation. After the second attempt return to main.
 
-## Native Dispatch
+Explain the split briefly, then act. An ordinary task requires no workflow when
+main can finish it directly. Do not treat a mention of agents as a dispatch order.
 
-The main thread creates a bounded TaskFile, chooses the contract model profile,
-and calls native `spawn_agent` with `fork_context: false`. A configured model is
-soft policy: if it is unavailable, inherit the parent model and record the
-fallback. Run writable tasks in parallel only when their declared scopes do not
-overlap.
+When delegating, read [CODEX_NATIVE_AGENTS.md](CODEX_NATIVE_AGENTS.md) and
+[the command guide](references/adaptive-workflows.md). Read stage skills only
+for the current stage. `contract.json` supplies model/role defaults.
 
-Every child prompt must include this task envelope:
+## Native task envelope
 
 ```text
 [NATIVE_CODEX_AGENT_TASK]
@@ -39,27 +53,17 @@ DispatcherRole: main
 [/NATIVE_CODEX_AGENT_TASK]
 ```
 
-Child agents read only their assigned TaskFile, stay inside its scope, complete
-the requested verification, and return the required structured report. The main
-thread uses native agent lifecycle tools to review, request bounded rework, and
-close completed agents.
+Use `prepare-spawn` to generate the envelope and host-compatible payload.
+Retain `fork_turns: "none"` or legacy `fork_context: false`, model and effort.
+Spawn the ready wave before waiting. While it runs, main stays in its reserved
+scope; consume whichever result completes first and recompute readiness.
 
-## Gate Provenance Boundary
+## Evidence boundary
 
-The hook rejects `spawn_agent` when a host-provided transcript's first
-`session_meta` record explicitly identifies a child session through
-`source.subagent`, `thread_source: subagent`, or `parent_thread_id`; it also
-rejects corresponding top-level hook-input signals. Codex 0.144 exposes
-`transcript_path`, with `transcriptPath` accepted for compatibility.
-
-This is defense in depth, not a hard identity proof. A host can omit the
-transcript path or make it unreadable, so a compliant dispatch is not rejected
-solely for absent provenance. In that case the workflow depends on host tool isolation
-to prevent workers from accessing `spawn_agent`.
-
-## Acceptance
-
-Implementer work requires accepted `spec` review, `quality` review, and a
-`final-verifier` before workflow acceptance. Every worker report must include
-the contract headings and use the same valid token for `Status` and
-`Final Result`.
+Original local transcripts verify child identity, terminal state, final report,
+model and effort. Missing evidence is a blocker, not permission to invent it.
+Without close_agent, record terminal evidence and closeStatus=unsupported.
+Child-session provenance and host tool isolation help prevent nested dispatch;
+they do not authenticate a hostile process with the same local file privileges.
+Whole-workflow acceptance belongs to main. Final-verifier workers call
+`verify-final-inputs`, never their own whole-workflow acceptance.

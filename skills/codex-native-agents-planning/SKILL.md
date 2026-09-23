@@ -1,17 +1,22 @@
 ---
 name: codex-native-agents-planning
-description: Plan bounded native Codex child-agent workflows with roles, disjoint scopes, acceptance criteria, and review gates before dispatch.
+description: Decide whether authorized development should stay in main or use native Astra workers, then define dependencies, access scopes, effort and acceptance risk.
 ---
 
 # Native Agent Planning
 
-Read `../codex-native-agents/CODEX_NATIVE_AGENTS.md`. Use this for a request that benefits from delegation.
+Use the core skill's decision rules. Main may delegate within the authorized
+assignment without asking again. Stay in main for short, uncertain or coupled
+work. A split needs a concrete result and useful work that can proceed independently.
 
-- Give the request one `WorkflowId` and every assignment a stable `TaskId`.
-- Choose one contract role, model profile, writable state, dependencies, and project-relative scope per task.
-- Write every TaskFile with the six required sections from the core contract.
-- Parallel writable tasks must have explicitly non-overlapping scopes; otherwise serialize them.
-- Plan `spec`, `quality`, and `final-verifier` gates for each implementer.
-- Keep architecture, task boundaries, acceptance, and rework decisions with the main thread.
-- Return `NEEDS_CONTEXT` instead of dispatching an assignment with unresolved decisions.
-- Put the exact `validate-task`, `register-task`, and verification commands in each TaskFile; dispatching records the observed spawn route separately from the requested profile.
+For a useful split, choose standard or strict before initialization. Map dependencies,
+read/write access and main-owned integration files. Register producers first.
+Choose role/complexity for effort; all routes use Astra. Estimate dispatch/review
+cost and stop splitting when it exceeds expected saved time. The `advise` command
+can record this reasoning without creating a workflow.
+
+Read ../codex-native-agents/references/adaptive-workflows.md before dispatch.
+Use ready/prepare-spawn to enforce slots, dependencies and access conflicts.
+Strict implementers need exact-run spec/quality reviews and final verification;
+standard uses current checks and main review. Do not plan redundant reviews for
+ordinary changes. Preserve user scope and explicit serial/no-subagent restrictions.

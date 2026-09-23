@@ -28,12 +28,109 @@ from codex_native_agents_runtime.workflow import (
 
 
 def run_cli(artifact_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    # Offline host fixtures: never real child-execution evidence.
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    args = list(args)
+    project = artifact_root.parent / "project"
+    host_home = artifact_root.parent / "fixture-home"
+    sessions = host_home / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    if args[0] == "init":
+        project.mkdir(exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(project)], check=True)
+        (project / "app.py").write_text("value=1\n")
+        caps = artifact_root / "caps.json"
+        caps.write_text(
+            json.dumps(
+                {
+                    "source": "active-tool-catalog",
+                    "tools": ["spawn_agent", "list_agents", "wait_agent"],
+                    "forkParameter": "fork_turns",
+                    "models": {"gpt-6-astra": ["low", "medium", "high", "xhigh"]},
+                    "maxAgents": 3,
+                }
+            )
+        )
+        args += [
+            "--project-root",
+            str(project),
+            "--host-capabilities",
+            str(caps),
+            "--profile",
+            "strict",
+        ]
+    if args[0] == "record-spawn":
+        workflow_id = args[args.index("--workflow-id") + 1]
+        task_id = args[args.index("--task-id") + 1]
+        prepared = run_cli(
+            artifact_root,
+            "prepare-spawn",
+            "--workflow-id",
+            workflow_id,
+            "--task-id",
+            task_id,
+        )
+        if prepared.returncode:
+            return prepared
+    if args[0] in {"record-run", "record-close"}:
+        workflow_id = args[args.index("--workflow-id") + 1]
+        task_id = args[args.index("--task-id") + 1]
+        agent = args[args.index("--agent-id") + 1]
+        task = json.loads((artifact_root / f"workflow_{workflow_id}.json").read_text())[
+            "tasks"
+        ][task_id]
+        transcript = sessions / f"rollout-{agent}.jsonl"
+        if args[0] == "record-run":
+            report = Path(args[args.index("--report-file") + 1]).read_text()
+            from datetime import datetime, timezone
+
+            now = datetime.now(timezone.utc).isoformat()
+            rows = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": agent,
+                        "cwd": str(project),
+                        "parent_thread_id": "main",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "timestamp": now,
+                    "payload": {"type": "task_started", "turn_id": "one"},
+                },
+                {
+                    "type": "turn_context",
+                    "payload": {
+                        "model": task["requestedModel"],
+                        "effort": task["reasoningEffort"],
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "phase": "final_answer",
+                        "content": [{"type": "output_text", "text": report}],
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "timestamp": now,
+                    "payload": {"type": "task_complete", "turn_id": "one"},
+                },
+            ]
+            transcript.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        else:
+            args[args.index("--status") + 1] = "unsupported"
+        args += ["--transcript-path", str(transcript)]
     return subprocess.run(
         [sys.executable, str(CLI), "--artifact-root", str(artifact_root), *args],
         cwd=REPO,
         text=True,
         capture_output=True,
-        env={**os.environ, "PYTHONNOUSERSITE": "1"},
+        env={**os.environ, "PYTHONNOUSERSITE": "1", "CODEX_HOME": str(host_home)},
         check=False,
     )
 
@@ -71,7 +168,8 @@ def register_cli_task(
         str(task_file),
         "--scope",
         "skills/codex-native-agents",
-        "--writable",
+        *(["--writable"] if role == "implementer" else []),
+        "--parallel",
         *extra_args,
     )
 
@@ -244,7 +342,13 @@ def test_implementer_requires_two_reviews_and_final_verifier() -> None:
 
 def test_record_spawn_updates_actual_model_and_inheritance_fallback() -> None:
     workflow = new_workflow("wf-spawn-evidence")
-    register_task(workflow, task_id="research", role="researcher", scopes=("docs",), writable=False)
+    register_task(
+        workflow,
+        task_id="research",
+        role="researcher",
+        scopes=("docs",),
+        writable=False,
+    )
 
     first = workflow_runtime.record_spawn(
         workflow,
@@ -254,7 +358,9 @@ def test_record_spawn_updates_actual_model_and_inheritance_fallback() -> None:
         fallback_reason="requested model unavailable in this host",
     )
     assert first["closure"] is None
-    workflow_runtime.record_close(workflow, task_id="research", agent_id="agent-research", status="closed")
+    workflow_runtime.record_close(
+        workflow, task_id="research", agent_id="agent-research", status="closed"
+    )
     fallback = workflow_runtime.record_spawn(
         workflow,
         task_id="research",
@@ -268,7 +374,7 @@ def test_record_spawn_updates_actual_model_and_inheritance_fallback() -> None:
     assert first["closure"]["runId"] is None
     assert fallback["executionMode"] == "inherit_parent"
     assert fallback["fallbackReason"] == "requested model unavailable in this host"
-    assert task["requestedModel"] == "gpt-5.6-luna"
+    assert task["requestedModel"] == "gpt-6-astra"
     assert task["latestSpawn"] == fallback
 
 
@@ -442,8 +548,18 @@ def test_cli_record_run_requires_matching_spawn_evidence(tmp_path: Path) -> None
     artifact_root = tmp_path / "artifacts"
     task_file = write_task(tmp_path, "run-evidence")
     report_file = write_report(tmp_path, "run-evidence-report", "researcher")
-    assert run_cli(artifact_root, "init", "--workflow-id", "wf-cli-run-evidence").returncode == 0
-    assert register_cli_task(artifact_root, "wf-cli-run-evidence", "research", "researcher", task_file).returncode == 0
+    assert (
+        run_cli(
+            artifact_root, "init", "--workflow-id", "wf-cli-run-evidence"
+        ).returncode
+        == 0
+    )
+    assert (
+        register_cli_task(
+            artifact_root, "wf-cli-run-evidence", "research", "researcher", task_file
+        ).returncode
+        == 0
+    )
 
     missing = record_cli_run(
         artifact_root,
@@ -455,18 +571,21 @@ def test_cli_record_run_requires_matching_spawn_evidence(tmp_path: Path) -> None
     assert missing.returncode != 0
     assert "spawn evidence" in missing.stderr.lower()
 
-    assert run_cli(
-        artifact_root,
-        "record-spawn",
-        "--workflow-id",
-        "wf-cli-run-evidence",
-        "--task-id",
-        "research",
-        "--agent-id",
-        "agent-research",
-        "--actual-model",
-        "gpt-5.6-luna",
-    ).returncode == 0
+    assert (
+        run_cli(
+            artifact_root,
+            "record-spawn",
+            "--workflow-id",
+            "wf-cli-run-evidence",
+            "--task-id",
+            "research",
+            "--agent-id",
+            "agent-research",
+            "--actual-model",
+            "gpt-6-astra",
+        ).returncode
+        == 0
+    )
     mismatch = run_cli(
         artifact_root,
         "record-run",
@@ -481,20 +600,30 @@ def test_cli_record_run_requires_matching_spawn_evidence(tmp_path: Path) -> None
     )
     assert mismatch.returncode != 0
     assert "agent id" in mismatch.stderr.lower()
-    assert record_cli_run(
-        artifact_root,
-        "wf-cli-run-evidence",
-        "research",
-        report_file,
-        record_spawn_evidence=False,
-    ).returncode == 0
+    assert (
+        record_cli_run(
+            artifact_root,
+            "wf-cli-run-evidence",
+            "research",
+            report_file,
+            record_spawn_evidence=False,
+        ).returncode
+        == 0
+    )
 
 
-def test_cli_record_spawn_writes_actual_route_evidence(tmp_path: Path) -> None:
+def test_cli_record_spawn_rejects_silent_inheritance(tmp_path: Path) -> None:
     artifact_root = tmp_path / "artifacts"
     task_file = write_task(tmp_path, "spawn-evidence")
-    assert run_cli(artifact_root, "init", "--workflow-id", "wf-cli-spawn").returncode == 0
-    assert register_cli_task(artifact_root, "wf-cli-spawn", "research", "researcher", task_file).returncode == 0
+    assert (
+        run_cli(artifact_root, "init", "--workflow-id", "wf-cli-spawn").returncode == 0
+    )
+    assert (
+        register_cli_task(
+            artifact_root, "wf-cli-spawn", "research", "researcher", task_file
+        ).returncode
+        == 0
+    )
 
     result = run_cli(
         artifact_root,
@@ -510,10 +639,12 @@ def test_cli_record_spawn_writes_actual_route_evidence(tmp_path: Path) -> None:
         "requested model unavailable in this host",
     )
 
-    assert result.returncode == 0, result.stderr
-    workflow = json.loads((artifact_root / "workflow_wf-cli-spawn.json").read_text(encoding="utf-8"))
-    assert workflow["tasks"]["research"]["latestSpawn"]["executionMode"] == "inherit_parent"
-    assert workflow["tasks"]["research"]["latestSpawn"]["fallbackReason"]
+    assert result.returncode != 0
+    assert "Astra-only" in result.stderr
+    workflow = json.loads(
+        (artifact_root / "workflow_wf-cli-spawn.json").read_text(encoding="utf-8")
+    )
+    assert workflow["tasks"]["research"]["latestSpawn"] is None
 
 
 def test_verify_preserves_accepted_run_spawn_and_closure_snapshots() -> None:
@@ -694,28 +825,50 @@ def test_cli_verify_fails_before_required_reviews(tmp_path: Path) -> None:
 def test_cli_verify_fails_before_final_verifier(tmp_path: Path) -> None:
     artifact_root = tmp_path / "artifacts"
     task_file = write_task(tmp_path, "gate")
-    assert run_cli(artifact_root, "init", "--workflow-id", "wf-pre-final").returncode == 0
-    assert register_cli_task(artifact_root, "wf-pre-final", "impl", "implementer", task_file).returncode == 0
-    assert record_cli_run(artifact_root, "wf-pre-final", "impl", write_report(tmp_path, "impl-report", "implementer")).returncode == 0
+    assert (
+        run_cli(artifact_root, "init", "--workflow-id", "wf-pre-final").returncode == 0
+    )
+    assert (
+        register_cli_task(
+            artifact_root, "wf-pre-final", "impl", "implementer", task_file
+        ).returncode
+        == 0
+    )
+    assert (
+        record_cli_run(
+            artifact_root,
+            "wf-pre-final",
+            "impl",
+            write_report(tmp_path, "impl-report", "implementer"),
+        ).returncode
+        == 0
+    )
+    assert close_cli_task(artifact_root, "wf-pre-final", "impl").returncode == 0
     for kind in ("spec", "quality"):
         reviewer_task_id = f"{kind}-review"
-        assert register_cli_task(
-            artifact_root,
-            "wf-pre-final",
-            reviewer_task_id,
-            "reviewer",
-            task_file,
-            "--review-for-task-id",
-            "impl",
-            "--review-kind",
-            kind,
-        ).returncode == 0
-        assert record_cli_run(
-            artifact_root,
-            "wf-pre-final",
-            reviewer_task_id,
-            write_report(tmp_path, f"{reviewer_task_id}-report", "reviewer"),
-        ).returncode == 0
+        assert (
+            register_cli_task(
+                artifact_root,
+                "wf-pre-final",
+                reviewer_task_id,
+                "reviewer",
+                task_file,
+                "--review-for-task-id",
+                "impl",
+                "--review-kind",
+                kind,
+            ).returncode
+            == 0
+        )
+        assert (
+            record_cli_run(
+                artifact_root,
+                "wf-pre-final",
+                reviewer_task_id,
+                write_report(tmp_path, f"{reviewer_task_id}-report", "reviewer"),
+            ).returncode
+            == 0
+        )
 
     result = run_cli(artifact_root, "verify", "--workflow-id", "wf-pre-final")
 
@@ -767,69 +920,90 @@ def test_cli_verifies_complete_implementer_workflow(tmp_path: Path) -> None:
 def test_concurrent_cli_record_runs_preserve_both_runs(tmp_path: Path) -> None:
     artifact_root = tmp_path / "artifacts"
     task_file = write_task(tmp_path, "concurrent")
-    assert run_cli(artifact_root, "init", "--workflow-id", "wf-concurrent").returncode == 0
+    assert (
+        run_cli(artifact_root, "init", "--workflow-id", "wf-concurrent").returncode == 0
+    )
     for task_id in ("one", "two"):
-        assert register_cli_task(artifact_root, "wf-concurrent", task_id, "researcher", task_file).returncode == 0
-        assert run_cli(
-            artifact_root,
-            "record-spawn",
-            "--workflow-id",
-            "wf-concurrent",
-            "--task-id",
-            task_id,
-            "--agent-id",
-            f"agent-{task_id}",
-            "--actual-model",
-            "gpt-5.6-luna",
-        ).returncode == 0
-    commands = [
-        [
-            sys.executable,
-            str(CLI),
-            "--artifact-root",
-            str(artifact_root),
-            "record-run",
-            "--workflow-id",
-            "wf-concurrent",
-            "--task-id",
-            task_id,
-            "--agent-id",
-            f"agent-{task_id}",
-            "--report-file",
-            str(write_report(tmp_path, f"{task_id}-report", "researcher")),
-        ]
-        for task_id in ("one", "two")
-    ]
-    processes = [
-        subprocess.Popen(command, cwd=REPO, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**os.environ, "PYTHONNOUSERSITE": "1"})
-        for command in commands
-    ]
-    results = [process.communicate(timeout=10) for process in processes]
+        assert (
+            register_cli_task(
+                artifact_root, "wf-concurrent", task_id, "researcher", task_file
+            ).returncode
+            == 0
+        )
+        assert (
+            run_cli(
+                artifact_root,
+                "record-spawn",
+                "--workflow-id",
+                "wf-concurrent",
+                "--task-id",
+                task_id,
+                "--agent-id",
+                f"agent-{task_id}",
+                "--actual-model",
+                "gpt-6-astra",
+            ).returncode
+            == 0
+        )
+    from concurrent.futures import ThreadPoolExecutor
 
-    assert all(process.returncode == 0 for process in processes), results
-    workflow = json.loads((artifact_root / "workflow_wf-concurrent.json").read_text(encoding="utf-8"))
+    reports = {
+        task_id: write_report(tmp_path, f"{task_id}-report", "researcher")
+        for task_id in ("one", "two")
+    }
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                record_cli_run,
+                artifact_root,
+                "wf-concurrent",
+                task_id,
+                reports[task_id],
+                record_spawn_evidence=False,
+            )
+            for task_id in reports
+        ]
+        results = [future.result(timeout=10) for future in futures]
+    assert all(result.returncode == 0 for result in results), [
+        result.stderr for result in results
+    ]
+    workflow = json.loads(
+        (artifact_root / "workflow_wf-concurrent.json").read_text(encoding="utf-8")
+    )
     assert {run["taskId"] for run in workflow["runs"].values()} == {"one", "two"}
     assert workflow["revision"] == 6
 
 
 @pytest.mark.parametrize("started_at", ["not-a-timestamp", "2026-07-10T12:00:00"])
-def test_cli_rejects_invalid_or_naive_started_at(tmp_path: Path, started_at: str) -> None:
+def test_cli_rejects_invalid_or_naive_started_at(
+    tmp_path: Path, started_at: str
+) -> None:
     artifact_root = tmp_path / "artifacts"
     task_file = write_task(tmp_path, "timestamp")
-    assert run_cli(artifact_root, "init", "--workflow-id", "wf-timestamp").returncode == 0
-    assert register_cli_task(artifact_root, "wf-timestamp", "research", "researcher", task_file).returncode == 0
-    assert run_cli(
-        artifact_root,
-        "record-spawn",
-        "--workflow-id",
-        "wf-timestamp",
-        "--task-id",
-        "research",
-        "--agent-id",
-        "agent-research",
-        "--actual-model",
-        "gpt-5.6-luna",
-    ).returncode == 0
+    assert (
+        run_cli(artifact_root, "init", "--workflow-id", "wf-timestamp").returncode == 0
+    )
+    assert (
+        register_cli_task(
+            artifact_root, "wf-timestamp", "research", "researcher", task_file
+        ).returncode
+        == 0
+    )
+    assert (
+        run_cli(
+            artifact_root,
+            "record-spawn",
+            "--workflow-id",
+            "wf-timestamp",
+            "--task-id",
+            "research",
+            "--agent-id",
+            "agent-research",
+            "--actual-model",
+            "gpt-6-astra",
+        ).returncode
+        == 0
+    )
 
     result = run_cli(
         artifact_root,
@@ -910,13 +1084,27 @@ def test_record_close_binds_latest_run_spawn_agent_and_closed_status() -> None:
     assert workflow["runs"]["research-run"]["closure"] == closure
 
 
-def test_cli_record_close_requires_matching_agent_and_writes_closure_evidence(tmp_path: Path) -> None:
+def test_cli_record_close_requires_matching_agent_and_writes_closure_evidence(
+    tmp_path: Path,
+) -> None:
     artifact_root = tmp_path / "artifacts"
     task_file = write_task(tmp_path, "close")
     report_file = write_report(tmp_path, "close-report", "researcher")
-    assert run_cli(artifact_root, "init", "--workflow-id", "wf-cli-close").returncode == 0
-    assert register_cli_task(artifact_root, "wf-cli-close", "research", "researcher", task_file).returncode == 0
-    assert record_cli_run(artifact_root, "wf-cli-close", "research", report_file).returncode == 0
+    assert (
+        run_cli(artifact_root, "init", "--workflow-id", "wf-cli-close").returncode == 0
+    )
+    assert (
+        register_cli_task(
+            artifact_root, "wf-cli-close", "research", "researcher", task_file
+        ).returncode
+        == 0
+    )
+    assert (
+        record_cli_run(
+            artifact_root, "wf-cli-close", "research", report_file
+        ).returncode
+        == 0
+    )
 
     rejected = run_cli(
         artifact_root,
@@ -935,8 +1123,10 @@ def test_cli_record_close_requires_matching_agent_and_writes_closure_evidence(tm
 
     accepted = close_cli_task(artifact_root, "wf-cli-close", "research")
     assert accepted.returncode == 0, accepted.stderr
-    workflow = json.loads((artifact_root / "workflow_wf-cli-close.json").read_text(encoding="utf-8"))
-    assert workflow["tasks"]["research"]["latestClose"]["status"] == "closed"
+    workflow = json.loads(
+        (artifact_root / "workflow_wf-cli-close.json").read_text(encoding="utf-8")
+    )
+    assert workflow["tasks"]["research"]["latestClose"]["status"] == "unsupported"
 
 
 def test_accepted_workflow_revalidates_final_acceptance_integrity() -> None:

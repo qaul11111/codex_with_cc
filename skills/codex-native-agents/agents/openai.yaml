@@ -1,7 +1,7 @@
 interface:
   display_name: "Codex Native Agents"
-  short_description: "Dispatch bounded work through native Codex child agents"
-  default_prompt: "Use $codex-native-agents to plan, dispatch, review, and verify a native Codex child-agent workflow."
+  short_description: "Choose direct work or concurrent native Astra agents"
+  default_prompt: "Use $codex-native-agents to complete this development task, choosing direct work or native Astra task waves according to dependencies, complexity and risk."
 
 policy:
   allow_implicit_invocation: true

@@ -13,3 +13,5 @@ Read the TaskFile and core contract before acting. Execute only the assigned tas
 - Return all required headings: `Status`, `Role`, `Summary`, `Changed Files`, `Verification`, `Findings`, `Final Result`, and `Risks Or Follow-ups`.
 - Use a valid status and make `Final Result` match it exactly.
 - Return the report file to the main thread, which records it with `native_agents.py record-run`; workers never update workflow records or dispatch agents.
+
+Final-verifier workers run `native_agents.py verify-final-inputs --workflow-id <id> --task-id <task>` before checks. They never run whole-workflow verify or update acceptance.

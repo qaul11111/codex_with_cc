@@ -18,36 +18,45 @@ def contract(repo: Path) -> dict[str, object]:
     )
 
 
-def test_model_profiles_are_soft_policy(contract: dict[str, object]) -> None:
+def test_model_profiles_use_astra_with_main_thread_fallback(
+    contract: dict[str, object],
+) -> None:
     spawn = contract["spawn"]
     model_profiles = contract["modelProfiles"]
 
     assert isinstance(spawn, dict)
     assert isinstance(model_profiles, dict)
     assert spawn["forkContext"] is False
-    assert spawn["fallbackPolicy"] == "inherit_parent"
+    assert spawn["fallbackPolicy"] == "main_thread"
     assert model_profiles["economy"] == {
-        "model": "gpt-5.6-luna", "reasoningEffort": "medium"
+        "model": "gpt-6-astra",
+        "reasoningEffort": "low",
     }
     assert model_profiles["balanced"] == {
-        "model": "gpt-5.6-terra", "reasoningEffort": "medium"
+        "model": "gpt-6-astra",
+        "reasoningEffort": "medium",
     }
     assert model_profiles["frontier"] == {
-        "model": "gpt-5.6-sol", "reasoningEffort": "high"
+        "model": "gpt-6-astra",
+        "reasoningEffort": "xhigh",
     }
 
 
-def test_native_contract_retains_the_approved_shared_fields(contract: dict[str, object]) -> None:
+def test_native_contract_retains_the_approved_shared_fields(
+    contract: dict[str, object],
+) -> None:
     assert contract["schemaVersion"] == 1
     assert contract["invocationContract"] == "codex_native_agents_workflow"
     assert contract["artifactSchemaVersion"] == 1
     assert contract["spawn"] == {
         "forkContext": False,
-        "fallbackPolicy": "inherit_parent",
+        "fallbackPolicy": "main_thread",
         "maxEscalations": 1,
+        "forkTurns": "none",
     }
     assert contract["modelProfiles"]["balancedHigh"] == {
-        "model": "gpt-5.6-terra", "reasoningEffort": "high"
+        "model": "gpt-6-astra",
+        "reasoningEffort": "high",
     }
     assert contract["roleProfiles"] == {
         "planner": "balancedHigh",

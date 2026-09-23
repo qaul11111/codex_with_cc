@@ -66,6 +66,8 @@ def compliant_spawn() -> dict[str, object]:
         "tool_input": {
             "message": task_envelope(),
             "fork_context": False,
+            "model": "gpt-6-astra",
+            "reasoning_effort": "medium",
         },
     }
 
@@ -182,16 +184,17 @@ def test_spawn_requires_explicit_false_fork_context(
     assert "fork_context: false" in denied(run_hook(compliant_spawn))
 
 
-def test_model_override_is_allowed(run_hook, compliant_spawn) -> None:
+def test_other_model_override_is_rejected(run_hook, compliant_spawn) -> None:
     payload = compliant_spawn["tool_input"]
     assert isinstance(payload, dict)
     payload["model"] = "any-current-host-model"
 
-    assert run_hook(compliant_spawn) == {}
+    assert "Astra profile" in denied(run_hook(compliant_spawn))
 
 
-def test_model_inheritance_is_allowed(run_hook, compliant_spawn) -> None:
-    assert run_hook(compliant_spawn) == {}
+def test_implicit_model_inheritance_is_rejected(run_hook, compliant_spawn) -> None:
+    compliant_spawn["tool_input"].pop("model")
+    assert "Astra profile" in denied(run_hook(compliant_spawn))
 
 
 def test_namespaced_spawn_agent_is_validated_by_tail(run_hook, compliant_spawn) -> None:

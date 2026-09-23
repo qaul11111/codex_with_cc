@@ -1,29 +1,32 @@
 ---
 name: codex-native-agents-dispatching
-description: Dispatch native Codex child agents with validated task envelopes, model routing, parallel-scope safety, reports, reviews, closure, and workflow verification.
+description: Dispatch eligible native Astra task waves with capability preflight, exact task metadata, independent scopes and original host evidence.
 ---
 
 # Native Agent Dispatching
 
-Read `../codex-native-agents/CODEX_NATIVE_AGENTS.md` and use only the native tools. The main thread owns every dispatch; workers must never create nested agents.
+Read ../codex-native-agents/references/adaptive-workflows.md for command arguments.
+Use the actual host tool catalog and preserve the emitted payload. Only main
+spawns agents. Spawn the ready wave before waiting; process whichever finishes
+first, then recompute readiness. Main continues only in non-conflicting scope.
 
-Use `skills/codex-native-agents/scripts/native_agents.py`. For each task:
+Command sequence (all support the same --artifact-root where applicable):
 
-```bash
-python3 skills/codex-native-agents/scripts/native_agents.py validate-task --task-file <task.md> --role <role>
-python3 skills/codex-native-agents/scripts/native_agents.py init --workflow-id <workflow-id>
-python3 skills/codex-native-agents/scripts/native_agents.py register-task --workflow-id <workflow-id> --task-id <task-id> --role <role> --task-file <task.md> --scope <path> --model-profile <profile> --writable [--parallel]
-# Reviewer registration additionally requires:
-python3 skills/codex-native-agents/scripts/native_agents.py register-task --workflow-id <workflow-id> --task-id <review-id> --role reviewer --task-file <review.md> --scope <path> --model-profile balancedHigh --review-for-task-id <implementer-id> --review-kind spec
+```sh
+python3 skills/codex-native-agents/scripts/native_agents.py init --workflow-id <id> --profile standard --host-capabilities <caps.json> --project-root <project>
+python3 skills/codex-native-agents/scripts/native_agents.py validate-task --task-file <task.md> --role implementer
+python3 skills/codex-native-agents/scripts/native_agents.py register-task --workflow-id <id> --task-id <task> --role implementer --task-file <task.md> --scope <path> --model-profile balanced --writable --parallel
+python3 skills/codex-native-agents/scripts/native_agents.py ready --workflow-id <id>
+python3 skills/codex-native-agents/scripts/native_agents.py prepare-spawn --workflow-id <id> --task-id <task>
+python3 skills/codex-native-agents/scripts/native_agents.py record-spawn --workflow-id <id> --task-id <task> --agent-id <actual-id> --actual-model gpt-6-astra
+python3 skills/codex-native-agents/scripts/native_agents.py record-run --workflow-id <id> --task-id <task> --agent-id <actual-id> --report-file <report.md> --transcript-path <original-child.jsonl>
+python3 skills/codex-native-agents/scripts/native_agents.py verify --workflow-id <id>
 ```
 
-1. Validate the TaskFile.
-2. Initialize and register the workflow task with `native_agents.py`.
-3. For independent work, spawn every eligible task before waiting for any result.
-4. Call `spawn_agent` with `fork_context: false` and the full native task envelope. Immediately record the returned agent ID and the observed route: `python3 skills/codex-native-agents/scripts/native_agents.py record-spawn --workflow-id <workflow-id> --task-id <task-id> --agent-id <agent-id> --actual-model <host-model>`, or use `--inherit-parent --fallback-reason <reason>` when the host falls back. A different actual model also requires `--fallback-reason`.
-5. Continue only non-overlapping main-thread work while children run.
-6. Wait only when the critical path needs a result, then record the structured report: `python3 skills/codex-native-agents/scripts/native_agents.py record-run --workflow-id <workflow-id> --task-id <task-id> --agent-id <agent-id> --report-file <report.md>`. `record-run` requires matching spawn evidence for the same agent ID. After `close_agent` succeeds, record its closure against that same attempt and agent: `python3 skills/codex-native-agents/scripts/native_agents.py record-close --workflow-id <workflow-id> --task-id <task-id> --agent-id <agent-id> --status closed`.
-7. For implementers, register and run separate `spec` and `quality` reviewers plus a `final-verifier`; record each with `record-run` after its report is returned.
-8. Close every completed, failed, or interrupted agent and record each closure. An interrupted or replaced attempt without a worker report still requires `close_agent` plus `record-close` before any replacement spawn. Acceptance requires every registered task to have a DONE latest run and every spawn attempt to have `closed` evidence; then run `python3 skills/codex-native-agents/scripts/native_agents.py verify --workflow-id <workflow-id>`.
+record-run requires matching spawn evidence and the original final response.
+Settle every attempt with record-close and actual close evidence or verified
+terminal evidence/unsupported as dictated by capabilities. Never treat interruption
+as host closure. An unreturned report is not DONE. Escalate at most once.
 
-Do not parallelize writable tasks with overlapping scope. A blocked or rejected result returns control to the main thread for bounded rework or escalation.
+Strict reviewer registration adds --review-for-task-id and --review-kind; it is
+read-only. Standard must run checks and record main review before verify.

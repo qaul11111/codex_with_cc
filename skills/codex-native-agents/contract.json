@@ -4,11 +4,15 @@
   "artifactSchemaVersion": 1,
   "spawn": {
     "forkContext": false,
-    "fallbackPolicy": "inherit_parent",
-    "maxEscalations": 1
+    "fallbackPolicy": "main_thread",
+    "maxEscalations": 1,
+    "forkTurns": "none"
   },
   "provenance": {
-    "hostTranscriptFields": ["transcript_path", "transcriptPath"],
+    "hostTranscriptFields": [
+      "transcript_path",
+      "transcriptPath"
+    ],
     "subagentSessionMetaSignals": [
       "source.subagent",
       "thread_source=subagent",
@@ -17,10 +21,22 @@
     "fallbackPolicy": "host_tool_isolation"
   },
   "modelProfiles": {
-    "economy": {"model": "gpt-5.6-luna", "reasoningEffort": "medium"},
-    "balanced": {"model": "gpt-5.6-terra", "reasoningEffort": "medium"},
-    "balancedHigh": {"model": "gpt-5.6-terra", "reasoningEffort": "high"},
-    "frontier": {"model": "gpt-5.6-sol", "reasoningEffort": "high"}
+    "economy": {
+      "model": "gpt-6-astra",
+      "reasoningEffort": "low"
+    },
+    "balanced": {
+      "model": "gpt-6-astra",
+      "reasoningEffort": "medium"
+    },
+    "balancedHigh": {
+      "model": "gpt-6-astra",
+      "reasoningEffort": "high"
+    },
+    "frontier": {
+      "model": "gpt-6-astra",
+      "reasoningEffort": "xhigh"
+    }
   },
   "roleProfiles": {
     "planner": "balancedHigh",
@@ -60,9 +76,12 @@
     "sub[- ]?thread",
     "delegat(?:e|ion|ing)",
     "worker[- ]?execution",
-    "子代理|子线程|多代理|委派|派工|执行层"
+    "\u5b50\u4ee3\u7406|\u5b50\u7ebf\u7a0b|\u591a\u4ee3\u7406|\u59d4\u6d3e|\u6d3e\u5de5|\u6267\u884c\u5c42"
   ],
-  "reviewKinds": ["spec", "quality"],
+  "reviewKinds": [
+    "spec",
+    "quality"
+  ],
   "taskFile": {
     "requiredSections": [
       "Goal",
@@ -73,12 +92,36 @@
       "Report Requirements"
     ],
     "sectionAliases": {
-      "Goal": ["Goal", "Assignment", "Task"],
-      "Allowed Scope": ["Allowed Scope", "Scope", "Allowed Files"],
-      "Forbidden Actions": ["Forbidden Actions", "Out of Scope", "Forbidden Work"],
-      "Acceptance Criteria": ["Acceptance Criteria", "Acceptance", "Self Check"],
-      "Verification": ["Verification", "Tests", "Required Verification"],
-      "Report Requirements": ["Report Requirements", "Worker Report", "Output Contract"]
+      "Goal": [
+        "Goal",
+        "Assignment",
+        "Task"
+      ],
+      "Allowed Scope": [
+        "Allowed Scope",
+        "Scope",
+        "Allowed Files"
+      ],
+      "Forbidden Actions": [
+        "Forbidden Actions",
+        "Out of Scope",
+        "Forbidden Work"
+      ],
+      "Acceptance Criteria": [
+        "Acceptance Criteria",
+        "Acceptance",
+        "Self Check"
+      ],
+      "Verification": [
+        "Verification",
+        "Tests",
+        "Required Verification"
+      ],
+      "Report Requirements": [
+        "Report Requirements",
+        "Worker Report",
+        "Output Contract"
+      ]
     }
   },
   "taskEnvelope": {

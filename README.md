@@ -8,12 +8,14 @@
 
 Use the fork at [qaul11111/codex_with_cc](https://github.com/qaul11111/codex_with_cc). This repository is not published to a marketplace. Install it only as a local, user-scoped development plugin using the Codex local plugin flow described in [AI_INSTALL.md](AI_INSTALL.md).
 
-## Workflow
+## Adaptive execution
 
-- Use one `WorkflowId` and scoped `TaskId` for each delegated assignment.
-- Dispatch native `spawn_agent` calls with `fork_context: false` and the full task envelope.
-- Spawn independent tasks before waiting; writable tasks may run together only with disjoint scopes.
-- Record structured reports and require spec review, quality review, and final verification for implementation work.
-- Close every child and verify the workflow before reporting completion.
+Main selects direct execution for short or coupled work, or native Astra workers
+for useful independent tasks. Profiles vary reasoning effort, not model family.
+Read/write conflicts, dependencies and host slots govern parallel task waves.
+Standard uses executed checks and main review; strict uses exact-run independent
+reviews and final verification. Original local host logs verify execution and
+lifecycle; hosts without close_agent use terminal evidence with unsupported closure.
 
-The five workflow skills cover planning, dispatching, worker execution, reviewing, and finishing. The machine-readable contract and local verifier live in [skills/codex-native-agents](skills/codex-native-agents).
+See [Chinese usage](docs/README.zh-CN.md) and the
+[command guide](skills/codex-native-agents/references/adaptive-workflows.md).

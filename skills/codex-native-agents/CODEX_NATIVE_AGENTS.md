@@ -1,89 +1,46 @@
 # Codex Native Agents
 
-This is the portable contract for the native Codex agent workflow. Read it
-before dispatching a child agent. `contract.json` is the machine-readable source
-for all shared tokens and policy values.
+The main thread owns dispatch, architecture, task boundaries, review, acceptance
+and delivery. Workers cannot call `spawn_agent` recursively.
 
-## Core Contract
+This skill permits main to select direct or delegated execution within authorized
+development scope. User restrictions and host policy take precedence. Ordinary
+short or coupled tasks stay in main without workflow overhead.
 
-1. The main thread owns dispatch, design, task boundaries, review decisions,
-   acceptance, and final delivery.
-2. Workers are context consumers. They cannot call `spawn_agent` recursively,
-   broaden scope, or dispatch additional workers.
-3. Every delegated task has one `WorkflowId`, one stable `TaskId`, a TaskFile,
-   and a native task envelope.
-4. The main thread dispatches native child agents with `fork_context: false`.
-5. The configured model profile is soft policy. An unavailable model falls back
-   to parent inheritance and is recorded in the workflow artifact.
-6. Writable tasks may run in parallel only with explicit, non-overlapping scope.
-7. Failed or blocked work may escalate one model tier at most once; repeated
-   failure returns control to the main thread.
+## Invariants
 
-## Gate Provenance Boundary
+- Native Astra only; profiles in contract.json select effort by role/complexity.
+  Unsupported models/efforts return control to main. No silent model inheritance.
+- New workflows explicitly select standard or strict and record a real host
+  capability snapshot. Historical records without policy retain strict semantics;
+  they are not automatically promoted to the new evidence model.
+- A six-section TaskFile defines Goal, Allowed Scope, Forbidden Actions,
+  Acceptance Criteria, Verification, Report Requirements. It is hashed before
+  dispatch; a changed task requires a fresh registration.
+- `prepare-spawn` reserves a slot, checks dependencies and conflicting access,
+  pins review RunId/final snapshot and source inputs, and emits the host payload.
+  Preserve fork_turns=none or legacy fork_context=false and the requested route.
+- Every attempt records the actual returned agent ID. Record its original host
+  final report, model and effort. A new attempt needs the previous terminal
+  settlement first; at most two attempts are dispatched per task.
+- With close_agent, keep original successful close tool evidence. Without it,
+  original terminal events prove execution stopped, and closure is unsupported.
+  interrupt_agent is never proof of host closure.
+- Standard requires current executed checks and a main-thread review. Strict
+  implementation requires spec review, quality review, and final verification.
+  Review targets are fixed before execution. Main performs overall acceptance;
+  a final worker uses verify-final-inputs.
+- Empty workflows, pending tasks, stale source, changed evidence and unfinished
+  attempts cannot be accepted. Accepted workflows remain immutable.
 
-The native gate denies `spawn_agent` when an explicit child-session signal is
-present, even if an envelope says `DispatcherRole: main`. Codex 0.144 provides
-`transcript_path` in hook input (`transcriptPath` is also tolerated); the gate
-reads only the first JSONL `session_meta` record and treats `source.subagent`,
-`thread_source: subagent`, or a non-empty `parent_thread_id` as a child signal.
-Top-level hook-input versions of those signals are also denied.
+## Boundaries
 
-Transcript metadata is defense in depth, not a universal identity
-authentication mechanism. Hosts may omit the transcript field, and the file
-may be unavailable or unreadable. In those cases, the gate does not deny a
-otherwise compliant dispatch solely for missing provenance and relies on host tool isolation
-to keep worker sessions from invoking dispatch tools.
+The hook recognizes explicit child-session provenance and uses host tool isolation
+as a fallback. Declared scopes are scheduling constraints, not a filesystem
+sandbox; main still reviews the actual diff. Checks cover Git tracked and
+nonignored files (including deletions and symlinks), excluding ArtifactRoot.
+Ignored dependencies, external services and runtime environments need relevant
+integration checks. Cost/time estimates are planning inputs, not measured savings.
 
-## Native Task Envelope
-
-Every child prompt contains this envelope:
-
-```text
-[NATIVE_CODEX_AGENT_TASK]
-WorkflowId: native-auth-workflow
-TaskId: auth-token-implementation
-Role: implementer
-TaskFile: .codex/codex_native_agents/tasks/auth-token-implementation.md
-Scope: src/auth,tests/auth
-ModelProfile: balanced
-Writable: true
-Parallel: false
-DispatcherRole: main
-[/NATIVE_CODEX_AGENT_TASK]
-```
-
-## TaskFile Contract
-
-Each TaskFile includes these non-empty sections:
-
-- `Goal`
-- `Allowed Scope`
-- `Forbidden Actions`
-- `Acceptance Criteria`
-- `Verification`
-- `Report Requirements`
-
-## Roles And Review Gates
-
-Worker roles are `planner`, `implementer`, `researcher`, `reviewer`, and
-`final-verifier`. Implementer work is accepted only after `spec` review,
-`quality` review, and final verification.
-
-## Worker Reports
-
-Every worker report contains these headings:
-
-```text
-Status
-Role
-Summary
-Changed Files
-Verification
-Findings
-Final Result
-Risks Or Follow-ups
-```
-
-`Status` and `Final Result` must match and use one of `DONE`,
-`DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`, or `FAIL`. Verification lists
-the commands actually run and their outcomes.
+See [adaptive workflows](references/adaptive-workflows.md) for commands, capability
+format, failure handling and report requirements.

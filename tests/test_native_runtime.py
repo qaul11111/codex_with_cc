@@ -26,12 +26,12 @@ def test_route_for_task_uses_role_and_risk() -> None:
     assert route_for_task("final-verifier", "high-risk").profile == "frontier"
 
 
-def test_unavailable_model_falls_back_to_parent() -> None:
+def test_unavailable_model_returns_to_main() -> None:
     route = route_for_task("researcher", "normal", available_models={"gpt-5.6-terra"})
 
     assert route.model is None
     assert route.reasoning_effort is None
-    assert route.fallback == "inherit_parent"
+    assert route.fallback == "main_thread"
 
 
 def test_parallel_writable_scopes_must_not_overlap() -> None:
