@@ -56,6 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
     advise.add_argument("--coupled", action="store_true")
     advise.add_argument("--estimated-minutes", type=float, required=True)
     advise.add_argument("--overhead-minutes", type=float, default=2)
+    advise.add_argument("--multi-agent-mode", choices=("enabled", "explicit-only", "disabled", "unknown"), default="unknown")
+    advise.add_argument("--delegation-request", choices=("none", "user", "agents", "skill"), default="none")
+    advise.add_argument("--user-restriction", choices=("none", "no-agents", "serial"), default="none")
+    advise.add_argument("--main-work-available", action="store_true")
 
     route = subparsers.add_parser(
         "route", help="Inspect a route without creating or dispatching a workflow"
@@ -166,6 +170,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         coupled=args.coupled,
                         estimated_minutes=args.estimated_minutes,
                         overhead_minutes=args.overhead_minutes,
+                        multi_agent_mode=args.multi_agent_mode,
+                        delegation_request=args.delegation_request,
+                        user_restriction=args.user_restriction,
+                        main_work_available=args.main_work_available,
                     ),
                     indent=2,
                 )

@@ -5,9 +5,14 @@ description: Choose direct work or native GPT-6 workers for authorized developme
 
 # Native Agent Planning
 
-Use the core skill's decision rules. Main may delegate within the authorized
-assignment without asking again. Stay in main for short, uncertain or coupled
-work. A split needs a concrete result and useful work that can proceed independently.
+Read the assessment rules in [the core skill](../codex-native-agents/SKILL.md).
+Before substantial execution, state the actual multi-agent mode and a concrete
+split or reason to work directly. The core skill explicitly requests eligible
+delegation under a mode that allows skill-requested workers; a hard prohibition
+or user no-agent/serial restriction still wins. Do not infer mode from the main
+model or change it automatically. A split needs a concrete result and useful
+work that main can do independently. Dispatch when eligible; reassess if scope
+or constraints change. Small direct tasks need no workflow.
 
 For a useful split, choose standard or strict before initialization. Map dependencies,
 read/write access and main-owned integration files. Register producers first.

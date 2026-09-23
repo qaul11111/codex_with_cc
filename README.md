@@ -10,8 +10,13 @@ Use the fork at [qaul11111/codex_with_cc](https://github.com/qaul11111/codex_wit
 
 ## Adaptive execution
 
-Main selects direct execution for short or coupled work, or native workers
-for useful independent tasks. Routing balances GPT-6 Luna for focused work,
+Before substantial work, main assesses the current multi-agent mode, useful
+independent tasks and coordination cost, then states a split or concrete reason
+to work directly. Eligible work must be dispatched after preflight. The skill
+explicitly requests delegation where host mode permits skill requests, while
+preserving hard prohibitions and user limits. Per-prompt reminders also cover
+ordinary development requests; they are instructions, not a guaranteed scheduler.
+Routing balances GPT-6 Luna for focused work,
 GPT-6 Sol for implementation and analysis, and GPT-6 Astra for difficult judgement.
 The active host's exact model IDs and reasoning efforts constrain every route.
 Unavailable automatic routes may select a stronger supported profile; explicit

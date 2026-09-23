@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from .common import ContractError
@@ -17,25 +18,54 @@ def advise(
     estimated_minutes: float,
     overhead_minutes: float,
     high_risk: bool = False,
+    multi_agent_mode: str = "unknown",
+    delegation_request: str = "none",
+    user_restriction: str = "none",
+    main_work_available: bool = False,
 ) -> dict:
     if (
         complexity not in {"simple", "normal", "complex", "high-risk"}
-        or min(estimated_minutes, overhead_minutes) < 0
+        or any(not math.isfinite(n) or n < 0 for n in (estimated_minutes, overhead_minutes))
     ):
         raise ContractError("Invalid complexity or work estimate")
-    direct = (
-        coupled
-        or not independent
-        or estimated_minutes <= overhead_minutes
-    )
+    if multi_agent_mode not in {"enabled", "explicit-only", "disabled", "unknown"}:
+        raise ContractError("Invalid multi-agent mode")
+    if delegation_request not in {"none", "user", "agents", "skill"}:
+        raise ContractError("Invalid delegation request source")
+    if user_restriction not in {"none", "no-agents", "serial"}:
+        raise ContractError("Invalid user restriction")
+    # Caller supplies the active instructions; advice never authorizes dispatch.
+    reasons = []
+    if user_restriction != "none":
+        reasons.append(("user-restriction", f"User requires {user_restriction} execution."))
+    if multi_agent_mode == "disabled":
+        reasons.append(("mode-disabled", "The task's host mode prohibits delegation."))
+    elif multi_agent_mode == "unknown":
+        reasons.append(("mode-unknown", "Read the current host mode before recommending dispatch."))
+    elif multi_agent_mode == "explicit-only" and delegation_request == "none":
+        reasons.append(("explicit-request-missing", "This mode needs an explicit user, AGENTS or applicable skill request."))
+    if coupled:
+        reasons.append(("coupled-work", "The candidate work is tightly coupled to main's changes."))
+    if not independent:
+        reasons.append(("no-independent-task", "No bounded independent worker task has been identified."))
+    if not main_work_available:
+        reasons.append(("no-concurrent-main-work", "Main has no useful independent work to do while the worker runs."))
+    if estimated_minutes <= overhead_minutes:
+        reasons.append(("overhead-exceeds-benefit", "Expected saved work does not exceed dispatch and review overhead."))
     return {
-        "execution": "main" if direct else "native",
+        "execution": "main" if reasons else "native",
         "profile": "strict" if high_risk or complexity == "high-risk" else "standard",
         "reason": (
-            "Keep coupled, short or non-independent work in main."
-            if direct
-            else "Independent work can overlap useful main-thread work."
+            " ".join(reason for _, reason in reasons)
+            if reasons
+            else "The mode permits this request and independent work can overlap useful main work; preflight and dispatch."
         ),
+        "reasonCodes": [code for code, _ in reasons],
+        "multiAgentMode": multi_agent_mode,
+        "delegationRequest": delegation_request,
+        "userRestriction": user_restriction,
+        "nextAction": "continue-main-or-resolve-blocker" if reasons else "preflight-and-dispatch",
+        "advisoryOnly": True,
         "estimatesOnly": True,
     }
 

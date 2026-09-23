@@ -242,9 +242,77 @@ def test_task_shape_drives_delegation(
             coupled=coupled,
             estimated_minutes=minutes,
             overhead_minutes=2,
+            multi_agent_mode="enabled",
+            main_work_available=True,
         )["execution"]
         == execution
     )
+
+
+@pytest.mark.parametrize(
+    "mode,request_source,restriction,main_work,execution,reason",
+    [
+        ("enabled", "none", "none", True, "native", None),
+        ("explicit-only", "skill", "none", True, "native", None),
+        ("explicit-only", "agents", "none", True, "native", None),
+        ("explicit-only", "user", "none", True, "native", None),
+        ("explicit-only", "none", "none", True, "main", "explicit-request-missing"),
+        ("disabled", "skill", "none", True, "main", "mode-disabled"),
+        ("disabled", "user", "none", True, "main", "mode-disabled"),
+        ("unknown", "skill", "none", True, "main", "mode-unknown"),
+        ("enabled", "skill", "no-agents", True, "main", "user-restriction"),
+        ("explicit-only", "skill", "serial", True, "main", "user-restriction"),
+        ("enabled", "skill", "none", False, "main", "no-concurrent-main-work"),
+    ],
+)
+def test_advice_cooperates_with_mode_and_user_limits(
+    mode, request_source, restriction, main_work, execution, reason
+):
+    result = planning.advise(
+        complexity="complex", independent=True, coupled=False,
+        estimated_minutes=20, overhead_minutes=2,
+        multi_agent_mode=mode, delegation_request=request_source,
+        user_restriction=restriction, main_work_available=main_work,
+    )
+    assert result["execution"] == execution
+    assert result["reasonCodes"] == ([reason] if reason else [])
+    assert result["multiAgentMode"] == mode
+    assert result["advisoryOnly"] is True
+    if execution == "native":
+        assert result["nextAction"] == "preflight-and-dispatch"
+
+
+def test_advice_defaults_do_not_assume_host_permission_or_useful_main_work():
+    result = planning.advise(
+        complexity="normal", independent=True, coupled=False,
+        estimated_minutes=20, overhead_minutes=2,
+    )
+    assert result["execution"] == "main"
+    assert result["reasonCodes"] == ["mode-unknown", "no-concurrent-main-work"]
+
+
+@pytest.mark.parametrize("minutes", [-1, float("nan"), float("inf")])
+def test_advice_rejects_unusable_estimates(minutes):
+    with pytest.raises(ValueError, match="estimate"):
+        planning.advise(
+            complexity="normal", independent=True, coupled=False,
+            estimated_minutes=minutes, overhead_minutes=2,
+        )
+
+
+@pytest.mark.parametrize("restriction,execution", [("none", "native"), ("no-agents", "main")])
+def test_advise_cli_applies_mode_without_creating_workflow(tmp_path, monkeypatch, capsys, restriction, execution):
+    monkeypatch.chdir(tmp_path)
+    assert main([
+        "advise", "--complexity", "complex", "--independent",
+        "--main-work-available", "--estimated-minutes", "20",
+        "--multi-agent-mode", "explicit-only", "--delegation-request", "skill",
+        "--user-restriction", restriction,
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["execution"] == execution
+    assert result["delegationRequest"] == "skill"
+    assert not list(tmp_path.iterdir())
 
 
 def test_admission_serializes_read_write_conflicts_and_dependencies(managed):

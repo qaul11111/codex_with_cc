@@ -5,8 +5,20 @@ local development. Main works directly when useful independent work is absent.
 `advise` is a deterministic planning aid, not a model or an automatic launcher:
 
 ```sh
-python3 skills/codex-native-agents/scripts/native_agents.py advise --complexity complex --independent --estimated-minutes 20 --overhead-minutes 2
+python3 skills/codex-native-agents/scripts/native_agents.py advise --complexity complex --independent --main-work-available --estimated-minutes 20 --overhead-minutes 2 --multi-agent-mode explicit-only --delegation-request skill
 ```
+
+Main supplies the mode from current host instructions: `enabled` permits proactive
+delegation; `explicit-only` requires an explicit `user`, `agents` (AGENTS.md), or
+applicable `skill` request; `disabled` prohibits it. This core skill explicitly
+requests eligible delegation, so use `skill` when applicable. Do not use it to
+override a hard prohibition. Unknown mode defaults to `unknown` and recommends
+main until resolved. `--user-restriction no-agents|serial` takes precedence.
+`--main-work-available` means useful non-conflicting main work actually exists.
+The command returns concrete `reasonCodes` and `nextAction`, creates no workflow,
+and neither discovers mode nor authorizes dispatch. Native advice still requires
+the capability and scope preflight below; report actual unavailable-model/tool or
+admission blockers rather than claiming a worker ran. Reassess if inputs change.
 
 Estimates are supplied by main. Consider coupling and integration cost, not just
 file count. Read-only investigations can overlap; readers cannot inspect a file

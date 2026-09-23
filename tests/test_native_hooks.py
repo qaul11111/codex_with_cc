@@ -455,10 +455,18 @@ def test_read_only_and_print_shell_commands_are_allowed(run_hook, command: str) 
         "Explain README.",
         "Explain the delegation pattern in this README.",
         "解释文档里的子代理工作流",
+        "检查 Android 项目的通信、存储、UI 模块并修复问题",
+        "继续把剩余模块做完",
+        "不要使用子代理，帮我审查整个项目",
+        "x",
     ],
 )
-def test_explanation_only_prompt_is_ignored(run_hook, prompt: str) -> None:
-    assert run_hook({"hook_event_name": "UserPromptSubmit", "prompt": prompt}) == {}
+def test_prompt_reminder_does_not_depend_on_delegation_keywords(run_hook, prompt: str) -> None:
+    output = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": prompt})
+    explicit = run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "Start two subagents"})
+    assert output == explicit
+    assert output["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    assert "permissionDecision" not in output["hookSpecificOutput"]
 
 
 def test_session_start_injects_compact_worker_guidance(run_hook) -> None:
@@ -467,7 +475,7 @@ def test_session_start_injects_compact_worker_guidance(run_hook) -> None:
 
     assert "must not call spawn_agent" in context
     assert "CODEX_NATIVE_AGENTS.md" not in context
-    assert len(context) < 900
+    assert len(context) < 2300
 
 
 @pytest.mark.parametrize(
@@ -491,7 +499,24 @@ def test_explicit_delegation_prompt_injects_compact_worker_guidance(run_hook, pr
     context = specific["additionalContext"]
 
     assert specific["hookEventName"] == "UserPromptSubmit"
-    assert "fork_context: false" in context
-    assert "must not call spawn_agent" in context
-    assert "[NATIVE_CODEX_AGENT_TASK]" in context
-    assert len(context) < 900
+    assert "codex-native-agents/SKILL.md" in context
+    assert "never delegate" in context
+    assert len(context) < 1100
+
+
+@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit"])
+@pytest.mark.parametrize("from_transcript", [False, True])
+def test_workers_receive_execution_context_instead_of_dispatch_assessment(
+    run_hook, tmp_path, event, from_transcript
+):
+    payload = {"hook_event_name": event, "prompt": "Start two subagents"}
+    if from_transcript:
+        payload["transcript_path"] = str(write_transcript(
+            tmp_path / "child.jsonl", {"source": {"subagent": {"thread_spawn": {"depth": 1}}}},
+        ))
+    else:
+        payload["parent_thread_id"] = "parent"
+    context = run_hook(payload)["hookSpecificOutput"]["additionalContext"]
+    assert "Native Codex worker:" in context
+    assert "dispatch assessment" not in context
+    assert "never spawn" in context

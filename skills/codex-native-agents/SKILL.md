@@ -1,17 +1,51 @@
 ---
 name: codex-native-agents
-description: Coordinate authorized development with direct work or native GPT-6 Astra, Sol and Luna subagents, choosing models by task complexity, risk and actual host support. Use for explicit delegation or substantial tasks that benefit from independent work.
+description: Assess decomposition before substantial development or investigation, then dispatch eligible native GPT-6 Astra, Sol and Luna subagents or explain direct execution. Cooperate with the task's multi-agent mode, user limits and actual host support.
 ---
 
 # Codex Native Agents
 
 The main thread owns dispatch, architecture, scope, acceptance, and delivery.
-Within an authorized development task, the main thread may choose native
-subagents without asking for delegation permission again. This skill authorizes
-that implementation choice only; preserve explicit user limits and host policy.
+For substantial authorized development or investigation, this skill explicitly
+requests delegation of eligible independent work, subject to the assessment below.
+This request satisfies a host mode that permits delegation when an applicable
+skill explicitly asks for it. It does not override a host prohibition, a user
+restriction, missing tools, or expand the authorized scope.
 Workers cannot call `spawn_agent` recursively or expand the assignment.
 
-## Decide before creating artifacts
+## Assess before substantial execution
+
+Before broad investigation, implementation or workflow creation, main must assess
+the task's multi-agent mode, user limits, candidate independent work, useful work
+remaining for main, and dispatch/review cost. A brief initial inspection is fine
+when needed to identify boundaries. Do not finish the whole task first and justify
+the lack of delegation afterward.
+
+- Read the actual current mode instructions. Proactive delegation may be enabled,
+  require an explicit user/AGENTS/skill request, or be prohibited. In the middle
+  case, this applicable skill supplies the explicit request; do not call that
+  mode an absolute prohibition. A hard prohibition or user no-agent restriction
+  wins. Do not toggle the task's mode or use another runtime to bypass it.
+- State the assessment briefly in the user's language: the concrete worker task,
+  what main will do concurrently, and the intended model, or a specific reason
+  for direct execution. For example: "Sol will inspect the isolated parser tests;
+  I will trace the unrelated transport failure." If direct, name the coupling,
+  missing capability, serial restriction, or insufficient benefit. "Main can do
+  it" and "the main model is Astra" are not reasons to skip eligible delegation.
+- If the split is useful and allowed, perform capability preflight, prepare and
+  dispatch it. An assessment alone does not fulfill an eligible dispatch. If
+  preflight or admission blocks it, explain the actual blocker and continue
+  authorized main work; do not invent a worker or ask again for routine permission.
+- Reassess when scope grows, a blocker opens independent work, or the mode/user
+  constraints change. Small direct fixes need no workflow or ceremonial status;
+  when the user requests agents, explain any decision not to dispatch even for
+  a small task. A mention of agents in quoted material is not a dispatch request.
+
+Use `advise` when a recorded decision helps. Supply mode and request source from
+the current instructions, not from model choice or a previous task. Its output
+is planning advice; it neither discovers mode nor grants permission.
+
+## Choose a useful split
 
 - Keep small fixes, uncertain design choices, tightly coupled edits and short
   investigations in main. Complexity alone does not justify delegation.
@@ -44,9 +78,6 @@ agent; they are not a background service or a claim of measured cost savings.
 Returning control to main does not waive a user's model restriction: if the user
 requires Sol only and Sol is unavailable, report the limitation instead of having
 an Astra main thread perform the restricted work.
-
-Explain the split briefly, then act. An ordinary task requires no workflow when
-main can finish it directly. Do not treat a mention of agents as a dispatch order.
 
 When delegating, read [CODEX_NATIVE_AGENTS.md](CODEX_NATIVE_AGENTS.md) and
 [the command guide](references/adaptive-workflows.md). Read stage skills only

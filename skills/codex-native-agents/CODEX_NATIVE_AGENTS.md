@@ -3,9 +3,11 @@
 The main thread owns dispatch, architecture, task boundaries, review, acceptance
 and delivery. Workers cannot call `spawn_agent` recursively.
 
-This skill permits main to select direct or delegated execution within authorized
-development scope. User restrictions and host policy take precedence. Ordinary
-short or coupled tasks stay in main without workflow overhead.
+Main first follows the [core assessment rules](SKILL.md#assess-before-substantial-execution):
+check the actual multi-agent mode, explain a split or concrete direct-work reason,
+and dispatch eligible work. The applicable skill explicitly requests delegation
+where the mode allows skill requests. User restrictions and hard host prohibitions
+take precedence. Short or coupled tasks stay in main without workflow overhead.
 
 ## Invariants
 
@@ -42,7 +44,11 @@ short or coupled tasks stay in main without workflow overhead.
 ## Boundaries
 
 The hook recognizes explicit child-session provenance and uses host tool isolation
-as a fallback. Declared scopes are scheduling constraints, not a filesystem
+as a fallback. Session and per-prompt context remind main to assess; workers get
+execution-only guidance. The hook cannot read the model's reasoning or discover
+the current multi-agent mode, and cannot guarantee a dispatch. Mode is interpreted
+from current instructions by main; `advise` only evaluates supplied inputs.
+Declared scopes are scheduling constraints, not a filesystem
 sandbox; main still reviews the actual diff. Checks cover Git tracked and
 nonignored files (including deletions and symlinks), excluding ArtifactRoot.
 Ignored dependencies, external services and runtime environments need relevant

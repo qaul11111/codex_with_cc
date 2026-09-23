@@ -76,7 +76,6 @@ function readContract() {
 }
 
 const CONTRACT = readContract();
-const TRIGGER_PATTERNS = CONTRACT.triggerPatterns.map((pattern) => new RegExp(pattern, "i"));
 const WORKER_ROLES = new Set(CONTRACT.workerRoles.map((role) => String(role)));
 const MODEL_PROFILES = new Set(Object.keys(CONTRACT.modelProfiles));
 const TRANSCRIPT_PATH_FIELDS = CONTRACT.provenance.hostTranscriptFields;
@@ -90,13 +89,22 @@ const BLOCKED_AGENT_EXECUTABLES = new Set([
 
 const CONTEXT = [
   "Native Codex agent gate:",
-  "- Main chooses direct work or independent GPT-6 workers by complexity and coordination cost, within user and host limits.",
+  "- Main: before substantial development/investigation, read codex-native-agents/SKILL.md and assess the current multi-agent mode, independent worker scope, useful concurrent main work and coordination cost. Briefly state the split and model, or a concrete no-dispatch reason, before substantial execution; reassess when scope or constraints change.",
+  "- The applicable core skill explicitly requests eligible delegation, including when the mode permits explicit skill requests. A hard host prohibition or user no-agent/serial restriction wins. Do not change mode or bypass it. If eligible, preflight and dispatch; an assessment alone is insufficient. Small direct tasks need no ceremony or workflow.",
   "- Use capability preflight and prepare-spawn; dispatch ready tasks before waiting. Standard uses checks/main review; strict adds independent reviews.",
   "- Dispatch only spawn_agent calls with fork_turns: none (or legacy fork_context: false) and a full [NATIVE_CODEX_AGENT_TASK] envelope.",
   "- The envelope must name WorkflowId, TaskId, Role, TaskFile, Scope, ModelProfile, Writable, Parallel, and DispatcherRole: main.",
   "- Workers must not call spawn_agent or dispatch nested workers; return the structured report to the main thread.",
   "- Use the prepared Luna/Sol/Astra model and effort supported by this host. Preserve explicit pins; no GPT-5.6 aliases. If unavailable, return control to main.",
 ].join("\n");
+
+const ASSESSMENT_REMINDER = [
+  "Native Codex dispatch assessment:",
+  "- If main and this is substantial development/investigation, read codex-native-agents/SKILL.md before substantial execution. Assess the actual multi-agent mode, user limits, independent worker scope, useful concurrent main work and overhead; briefly state a split/model or a concrete no-dispatch reason. Dispatch eligible work after preflight and reassess if scope or constraints change.",
+  "- The core skill explicitly requests eligible delegation where skill requests are allowed; it cannot override a hard prohibition or user restriction. Do not change mode. Small direct tasks need no ceremony. If a worker, stay within the assigned scope and never delegate.",
+].join("\n");
+
+const WORKER_CONTEXT = "Native Codex worker: complete only your assigned scope, return the structured report, and never spawn or dispatch nested workers. Main owns decomposition and acceptance.";
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -238,11 +246,6 @@ function textItems(input) {
 function dispatchText(input) {
   const message = typeof input?.message === "string" ? input.message : "";
   return [message, ...textItems(input)].filter(Boolean).join("\n");
-}
-
-function promptText(input) {
-  const prompt = input.prompt || input.user_prompt || input.userPrompt || "";
-  return typeof prompt === "string" ? prompt : "";
 }
 
 function toolNameTail(name) {
@@ -436,22 +439,15 @@ function deny(reason) {
   };
 }
 
-function additionalContext(name) {
+function additionalContext(name, input) {
   return {
     hookSpecificOutput: {
       hookEventName: name,
-      additionalContext: CONTEXT,
+      additionalContext: childSessionProvenance(input)
+        ? WORKER_CONTEXT
+        : name === "UserPromptSubmit" ? ASSESSMENT_REMINDER : CONTEXT,
     },
   };
-}
-
-function hasDelegationIntent(prompt) {
-  const text = String(prompt);
-  const englishAction = /\b(?:delegate|dispatch|start|spawn|launch)\b/i;
-  const englishWorker = /\b(?:subagents?|child\s+agents?|workers?)\b/i;
-  const useWorker = /(?:^|[.!?]\s*)(?:please\s+)?use\s+(?:a|an|one|two|three|\d+)?\s*(?:child\s+agent|subagent|worker)\b/i;
-  const chineseIntent = /(?:开启|启动|安排|委派|派遣|分配).{0,20}(?:子代理|子线程|工作者|workers?)/;
-  return (englishAction.test(text) && englishWorker.test(text)) || useWorker.test(text) || chineseIntent.test(text);
 }
 
 function nestedToolUses(input) {
@@ -509,12 +505,8 @@ function handlePreToolUse(input) {
 const input = parseInput(await readStdin());
 const name = eventName(input);
 
-if (name === "SessionStart") {
-  writeJson(additionalContext(name));
-} else if (name === "UserPromptSubmit") {
-  if (hasDelegationIntent(promptText(input))) {
-    writeJson(additionalContext(name));
-  }
+if (name === "SessionStart" || name === "UserPromptSubmit") {
+  writeJson(additionalContext(name, input));
 } else if (name === "PreToolUse") {
   handlePreToolUse(input);
 }
