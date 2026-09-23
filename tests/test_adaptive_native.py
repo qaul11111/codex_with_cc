@@ -369,6 +369,71 @@ def test_false_closed_claim_and_changed_host_log_rejected(managed):
         evidence.recheck_terminal(saved, flow["policy"]["projectRoot"])
 
 
+@pytest.mark.parametrize(
+    "variant, accepted",
+    [
+        ("matching_receipt", True),
+        ("no_receipt", False),
+        ("different_receipt", False),
+        ("commentary", False),
+        ("previous_turn", False),
+        ("superseded_final", False),
+        ("matching_id_wrong_receipt", False),
+        ("abort_then_complete", False),
+        ("later_matching_receipt", False),
+    ],
+)
+def test_relay_final_requires_matching_host_completion(managed, variant, accepted):
+    flow, project, root, home = managed
+    register(managed)
+    planning.prepare_spawn(flow, "work")
+    w.record_spawn(
+        flow, task_id="work", agent_id="agent",
+        actual_model=flow["tasks"]["work"]["requestedModel"],
+    )
+    path, report = transcript(managed, "work", "agent")
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    message = rows[3]["payload"]
+    message["internal_chat_message_metadata_passthrough"] = {"turn_id": "upstream"}
+    rows[4]["payload"]["last_agent_message"] = report
+    if variant == "no_receipt":
+        del rows[4]["payload"]["last_agent_message"]
+    elif variant in {"different_receipt", "matching_id_wrong_receipt"}:
+        rows[4]["payload"]["last_agent_message"] = "different report"
+        if variant == "matching_id_wrong_receipt":
+            message["internal_chat_message_metadata_passthrough"]["turn_id"] = "one"
+    elif variant == "commentary":
+        message["phase"] = "commentary"
+    elif variant == "previous_turn":
+        next_start = copy.deepcopy(rows[1])
+        next_start["payload"]["turn_id"] = "two"
+        rows[4]["payload"]["turn_id"] = "two"
+        rows[4:4] = [next_start, copy.deepcopy(rows[2])]
+    elif variant == "superseded_final":
+        later = copy.deepcopy(rows[3])
+        later["payload"]["content"][0]["text"] = "new final"
+        rows.insert(4, later)
+    elif variant == "abort_then_complete":
+        aborted = copy.deepcopy(rows[4])
+        aborted["payload"]["type"] = "turn_aborted"
+        rows.insert(4, aborted)
+    elif variant == "later_matching_receipt":
+        rows.append(copy.deepcopy(rows[4]))
+        rows[4]["payload"]["last_agent_message"] = "different report"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    if accepted:
+        run = w.record_run(
+            flow, task_id="work", agent_id="agent", report=report, transcript_path=path
+        )
+        assert run["hostEvidence"]["final"] == report
+        assert run["hostEvidence"]["turnId"] == "one"
+    else:
+        with pytest.raises(ValueError, match="original host final"):
+            w.record_run(
+                flow, task_id="work", agent_id="agent", report=report, transcript_path=path
+            )
+
+
 def test_unprepared_route_and_model_substitution_rejected(managed):
     flow = managed[0]
     register(managed)

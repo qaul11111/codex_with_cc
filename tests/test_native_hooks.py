@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -104,6 +105,41 @@ def test_hooks_config_has_only_hooks_and_native_entrypoint() -> None:
                 command = hook["command"]
                 assert "native-agent-gate-hook.mjs" in command
                 assert "subagent-gate-hook.mjs" not in command
+
+
+@pytest.mark.parametrize("root_variable", ["PLUGIN_ROOT", "CODEX_PLUGIN_ROOT", "both"])
+def test_manifest_launcher_uses_host_plugin_root(tmp_path, root_variable) -> None:
+    config = json.loads((REPO / "hooks/hooks.json").read_text())
+    command = config["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    env = {k: v for k, v in os.environ.items() if k not in {"PLUGIN_ROOT", "CODEX_PLUGIN_ROOT"}}
+    if root_variable == "both":
+        env["PLUGIN_ROOT"] = str(REPO)
+        env["CODEX_PLUGIN_ROOT"] = str(tmp_path / "stale-legacy-root")
+    else:
+        env[root_variable] = str(REPO)
+    result = subprocess.run(
+        command, shell=True, cwd=tmp_path, env=env,
+        input=json.dumps({"hook_event_name": "SessionStart", "source": "startup"}),
+        text=True, capture_output=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    specific = json.loads(result.stdout)["hookSpecificOutput"]
+    assert specific["hookEventName"] == "SessionStart"
+    assert "Native Codex agent gate:" in specific["additionalContext"]
+
+
+def test_manifest_launcher_rejects_missing_plugin_root(tmp_path) -> None:
+    config = json.loads((REPO / "hooks/hooks.json").read_text())
+    command = config["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    env = {k: v for k, v in os.environ.items() if k not in {"PLUGIN_ROOT", "CODEX_PLUGIN_ROOT"}}
+    result = subprocess.run(
+        command, shell=True, cwd=tmp_path, env=env,
+        input=json.dumps({"hook_event_name": "SessionStart", "source": "startup"}),
+        text=True, capture_output=True, timeout=10,
+    )
+    assert result.returncode == 1
+    assert "Missing PLUGIN_ROOT" in result.stderr
+    assert not result.stdout
 
 
 def test_spawn_requires_native_task_envelope(run_hook) -> None:

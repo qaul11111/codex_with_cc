@@ -27,7 +27,7 @@ The older Claude-routing checkout was not modified by this change.
   transcripts must agree on the exact model and effort. Existing scope, dependency,
   concurrency, lifecycle and standard/strict acceptance checks remain in force.
 
-## Current host observation
+## Pre-install host observation
 
 The active session's spawn schema on this date advertises `gpt-6-astra`, but
 `gpt-5.6-sol` and `gpt-5.6-luna`, not the requested GPT-6 Sol/Luna IDs. The local
@@ -75,3 +75,14 @@ Prices are a dated reference, not a billing estimate. The implemented policy doe
 not learn from historical latency or token usage, switch the main-session model,
 or run an autonomous background scheduler. Real workload comparison and fresh-host
 execution remain separate from source validation.
+
+## Installation and live follow-up
+
+The 2026-09-23 installation and real model runs supersede the availability and
+installation observations above. See [live smoke results](GPT6-LIVE-SMOKE.md).
+The installed plugin now supports the current host's relay metadata format;
+239 regression cases pass. A fresh app-server turn verified successful startup
+and prompt hooks with the installed skills and routing context present. The real
+smoke exposed an incorrect Luna conclusion,
+which failed acceptance; a separate Sol correction workflow was accepted. This
+does not establish model quality or cost savings across workloads.

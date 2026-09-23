@@ -162,10 +162,12 @@ def terminal(
         None,
         None,
     )
+    final_candidate = None
     for index, r in enumerate(records):
         p = r.get("payload") or {}
         if r.get("type") == "event_msg" and p.get("type") == "task_started":
             start, event, final, contexts, turn_id = r, None, "", [], p.get("turn_id")
+            final_candidate = None
         elif r.get("type") == "turn_context" and start and event is None:
             contexts.append(
                 (
@@ -187,23 +189,33 @@ def terminal(
                 (p.get("channel") == "final" or p.get("phase") == "final_answer")
                 and p.get("channel") in {None, "final"}
                 and p.get("phase") in {None, "final_answer"}
-                and (p.get("internal_chat_message_metadata_passthrough") or {}).get(
-                    "turn_id", turn_id
-                )
-                == turn_id
             ):
-                final = "\n".join(
+                final_candidate = "\n".join(
                     x.get("text", "")
                     for x in p.get("content", [])
                     if x.get("type") in {"text", "output_text"}
                 )
+                message_turn = (
+                    p.get("internal_chat_message_metadata_passthrough") or {}
+                ).get("turn_id", turn_id)
+                final = final_candidate if message_turn == turn_id else ""
         elif r.get("type") == "event_msg" and p.get("type") in {
             "task_complete",
             "turn_aborted",
         }:
-            if start and turn_id and p.get("turn_id") == turn_id:
+            if start and event is None and turn_id and p.get("turn_id") == turn_id:
                 event = r
                 terminal_index = index
+                if p.get("type") == "task_complete" and "last_agent_message" in p:
+                    # Relays can retain an upstream turn ID in message metadata.
+                    # Bind the final to this host turn only when its completion
+                    # receipt exactly repeats the final observed inside the turn.
+                    final = (
+                        final_candidate
+                        if final_candidate is not None
+                        and p["last_agent_message"] == final_candidate
+                        else ""
+                    )
     if (
         not start
         or not event

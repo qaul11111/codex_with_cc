@@ -44,7 +44,8 @@ const FALLBACK_CONTRACT = {
 };
 
 function pluginRoot() {
-  return process.env.CODEX_PLUGIN_ROOT
+  return process.env.PLUGIN_ROOT
+    || process.env.CODEX_PLUGIN_ROOT
     || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 }
 
