@@ -1,6 +1,6 @@
 ---
 name: codex-native-agents
-description: Optimize authorized development work by choosing main-thread execution or bounded native Astra subagents according to task independence, complexity, risk and parallelism; use for explicit delegation and substantial development tasks that benefit from coordination.
+description: Coordinate authorized development with direct work or native GPT-6 Astra, Sol and Luna subagents, choosing models by task complexity, risk and actual host support. Use for explicit delegation or substantial tasks that benefit from independent work.
 ---
 
 # Codex Native Agents
@@ -24,11 +24,26 @@ Workers cannot call `spawn_agent` recursively or expand the assignment.
 - Default to standard acceptance: main reviews the actual diff and executes
   relevant checks. Choose strict before dispatch for high-risk changes or
   explicitly requested independent reviews. Do not downgrade a running workflow.
-- Use Astra low for simple investigation, medium for ordinary work, high for
-  complex work/review, xhigh for the hardest judgement and final verification.
-  If the advertised route is unavailable, keep work in main or explicitly replan;
-  do not silently switch to another model. One failed attempt may escalate one
-  profile with a fresh preparation. After the second attempt return to main.
+- Use Luna low for focused work, Sol medium for ordinary work, Sol high for
+  deeper implementation/review, and Astra xhigh for difficult judgement,
+  high-risk work and final verification. Main chooses role/complexity; runtime
+  checks the exact model/effort against the active host catalog and records the
+  selection reason. An unavailable automatic route can move to a stronger
+  supported profile; if none exists, keep work in main. Never alias GPT-5.6 to 6.
+- Preserve an explicitly chosen profile with `--model-profile`; it cannot be
+  silently replaced or escalated. Automatic failed attempts may escalate once:
+  Luna to Sol, Sol to Astra. Prepare a fresh attempt after terminal settlement.
+  After the second attempt, or at the top profile, return to main. Resolve missing
+  context, unavailable tools or permissions before considering a stronger model.
+
+Keep the user's main-session model unchanged. Dispatch coherent assignments with
+the minimum sufficient context and concise result cards; do not fill every slot
+or split a short task merely to use all three models. The `route` command previews
+selection without dispatch. These rules automate decisions through the main
+agent; they are not a background service or a claim of measured cost savings.
+Returning control to main does not waive a user's model restriction: if the user
+requires Sol only and Sol is unavailable, report the limitation instead of having
+an Astra main thread perform the restricted work.
 
 Explain the split briefly, then act. An ordinary task requires no workflow when
 main can finish it directly. Do not treat a mention of agents as a dispatch order.

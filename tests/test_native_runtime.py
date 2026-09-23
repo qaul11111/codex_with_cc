@@ -20,7 +20,8 @@ from codex_native_agents_runtime.task_contract import validate_task_file
 
 
 def test_route_for_task_uses_role_and_risk() -> None:
-    assert route_for_task("researcher", "normal").profile == "economy"
+    assert route_for_task("researcher", "simple").profile == "economy"
+    assert route_for_task("researcher", "normal").profile == "balanced"
     assert route_for_task("implementer", "normal").profile == "balanced"
     assert route_for_task("implementer", "complex").profile == "balancedHigh"
     assert route_for_task("final-verifier", "high-risk").profile == "frontier"

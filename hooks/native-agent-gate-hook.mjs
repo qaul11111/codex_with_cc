@@ -89,12 +89,12 @@ const BLOCKED_AGENT_EXECUTABLES = new Set([
 
 const CONTEXT = [
   "Native Codex agent gate:",
-  "- Within authorized development, main chooses direct work or independent Astra workers according to complexity, dependencies and coordination cost; respect user and host limits.",
-  "- Use capability preflight and prepare-spawn before dispatch; process ready independent tasks before waiting. Standard uses checks/main review; strict adds independent reviews.",
+  "- Main chooses direct work or independent GPT-6 workers by complexity and coordination cost, within user and host limits.",
+  "- Use capability preflight and prepare-spawn; dispatch ready tasks before waiting. Standard uses checks/main review; strict adds independent reviews.",
   "- Dispatch only spawn_agent calls with fork_turns: none (or legacy fork_context: false) and a full [NATIVE_CODEX_AGENT_TASK] envelope.",
   "- The envelope must name WorkflowId, TaskId, Role, TaskFile, Scope, ModelProfile, Writable, Parallel, and DispatcherRole: main.",
   "- Workers must not call spawn_agent or dispatch nested workers; return the structured report to the main thread.",
-  "- Use gpt-6-astra and the task profile effort. If unavailable, return to the main thread.",
+  "- Use the prepared Luna/Sol/Astra model and effort supported by this host. Preserve explicit pins; no GPT-5.6 aliases. If unavailable, return control to main.",
 ].join("\n");
 
 function readStdin() {
@@ -420,7 +420,7 @@ function validateSpawn(input) {
   const route = CONTRACT.modelProfiles[envelope?.ModelProfile];
   if (route && (input.model !== route.model
       || prop(input, "reasoning_effort", "reasoningEffort") !== route.reasoningEffort)) {
-    problems.push("model and reasoning_effort must match the Astra profile");
+    problems.push("model and reasoning_effort must match the prepared profile");
   }
   return problems;
 }

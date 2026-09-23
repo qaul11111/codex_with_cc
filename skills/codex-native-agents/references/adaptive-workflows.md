@@ -16,10 +16,10 @@ while a scheduled writer changes it. Reserve shared integration files for main.
 
 Read the actual active tool schema and save its capability snapshot. This example
 is a schema example, not evidence of the current host. maxAgents means available
-child slots, excluding main. Use the exact host fork parameter and Astra efforts.
+child slots, excluding main. Use the exact host fork parameter, model IDs and efforts.
 
 ```json
-{"source":"active-tool-catalog","tools":["spawn_agent","list_agents","wait_agent"],"forkParameter":"fork_turns","models":{"gpt-6-astra":["low","medium","high","xhigh"]},"maxAgents":3}
+{"source":"active-tool-catalog","tools":["spawn_agent","list_agents","wait_agent"],"forkParameter":"fork_turns","models":{"gpt-6-luna":["low","medium","high"],"gpt-6-sol":["low","medium","high","xhigh"],"gpt-6-astra":["low","medium","high","xhigh"]},"maxAgents":3}
 ```
 
 ```sh
@@ -29,6 +29,49 @@ python3 skills/codex-native-agents/scripts/native_agents.py init --workflow-id <
 Use strict for high risk or requested independent reviews. Policy is fixed at
 initialization. Never edit workflow JSON to bypass admission or acceptance.
 Capabilities describe this host; do not copy a different host's snapshot.
+API model availability or a model picker entry does not prove that this session's
+spawn tool supports the model. In particular, gpt-5.6-sol/luna are not aliases for
+gpt-6-sol/luna. A new session may expose a newer catalog; inspect it again.
+
+## Model selection
+
+Preview a route without creating workflow artifacts or starting a model:
+
+```sh
+python3 skills/codex-native-agents/scripts/native_agents.py route --role implementer --complexity normal --host-capabilities <caps.json>
+```
+
+The four profiles are economy (Luna low), balanced (Sol medium), balancedHigh
+(Sol high), and frontier (Astra xhigh). Role and complexity choose a preferred
+profile. Automatic selection tries that profile, then stronger supported profiles;
+the result includes the preferred profile, actual route and reason. Never choose
+a lower profile to bypass missing capability. If nothing qualifies, return to main.
+Registration rejects an unavailable route before creating a pending task, so other
+tasks can still finish. Respect user model restrictions when choosing any main-thread
+follow-up; a fallback is not permission to run restricted work on a different model.
+
+`--complexity` accepts simple, normal (default), complex and high-risk:
+
+| Role | simple | normal | complex | high-risk |
+| --- | --- | --- | --- | --- |
+| researcher | economy | balanced | balancedHigh | frontier |
+| implementer | balanced | balanced | balancedHigh | frontier |
+| planner | balanced | balanced | frontier | frontier |
+| reviewer | balanced | balancedHigh | frontier | frontier |
+| final-verifier | frontier | frontier | frontier | frontier |
+
+A focused independent log scan can use `--role researcher --complexity simple`
+to choose Luna automatically, keeping failure escalation available. Do not add an
+economy pin merely to trigger Luna. A complex investigation tracing unknown
+causes deserves complex instead. Short scans still stay in main when dispatch
+overhead exceeds useful work; a long batch of simple scans can benefit from delegation.
+
+Use `--model-profile <profile>` for a user's explicit choice. A pin cannot change
+on capability failure or retry. High-risk tasks and final verification require
+frontier; explain an incompatible lower pin instead of silently overriding it.
+The same choice must be supplied at registration. Main-session model switching
+is outside this workflow. Pricing and measured latency are not inputs to this
+deterministic router; compare real tasks before claiming savings.
 
 ## Register and dispatch
 
@@ -47,25 +90,32 @@ python3 skills/codex-native-agents/scripts/native_agents.py prepare-spawn --work
 
 All commands accept --artifact-root; use the same absolute path throughout.
 Omit --depends-on when independent and --parallel when serial. Dependencies must
-already be registered. --model-profile, if supplied, must match the routed role
-and complexity. Scope includes relevant reads as well as writes; broad scopes
+already be registered. Omit --model-profile for automatic selection; a supplied
+profile is pinned and must meet the task's risk requirements. Scope includes relevant reads as well as writes; broad scopes
 trade parallelism for safety. Reviewers/final-verifiers must be read-only.
 
 Call the actual native spawn tool using the emitted payload. Do not reconstruct
 its fork/model/effort fields. Immediately register the returned ID:
 
 ```sh
-python3 skills/codex-native-agents/scripts/native_agents.py record-spawn --workflow-id <id> --task-id <task> --agent-id <actual-id> --actual-model gpt-6-astra
+python3 skills/codex-native-agents/scripts/native_agents.py record-spawn --workflow-id <id> --task-id <task> --agent-id <actual-id> --actual-model <prepared-model>
 ```
 
 Prepare and spawn every eligible task in a ready wave before waiting. Continue
 non-conflicting main work. When results arrive, record/settle them and recompute
 ready tasks. Do not launch future dependency waves early. Cap concurrency by host
 slots and useful independent work. Do not start a child solely to occupy a slot.
+`ready` separates first attempts in `ready` from eligible retries in
+`requiresEscalation`; both share the same scope and slot reservations. Review the
+failure cause before preparing a retry with `--escalate`. `blocked` explains pins,
+exhausted routes, dependencies or capacity. A second ordinary preparation is rejected.
 
-A failed or interrupted first attempt may use prepare-spawn --escalate to move
-up one effort profile, retaining the Astra model. A second failure returns to main
-for diagnosis/replanning. Missing inputs require clarification, not more effort.
+A failed or interrupted first automatic attempt may use prepare-spawn --escalate:
+economy moves to balanced, balanced/balancedHigh move to frontier. Capability
+selection can skip unsupported intermediate profiles upward. Frontier has no
+higher route. A pin requires explicit replanning instead of escalation. A second
+failure returns to main for diagnosis/replanning. Missing inputs require
+clarification, not more effort. Preserve each attempt's original model/effort/reason.
 If a spawn fails or its outcome is uncertain, preserve the prepared record and
 resolve the actual host state before retrying. Never clear a reservation to hide
 an unrecorded child. An unresolved preparation blocks acceptance.

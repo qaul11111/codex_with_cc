@@ -374,7 +374,7 @@ def test_record_spawn_updates_actual_model_and_inheritance_fallback() -> None:
     assert first["closure"]["runId"] is None
     assert fallback["executionMode"] == "inherit_parent"
     assert fallback["fallbackReason"] == "requested model unavailable in this host"
-    assert task["requestedModel"] == "gpt-6-astra"
+    assert task["requestedModel"] == "gpt-6-sol"
     assert task["latestSpawn"] == fallback
 
 
@@ -640,7 +640,7 @@ def test_cli_record_spawn_rejects_silent_inheritance(tmp_path: Path) -> None:
     )
 
     assert result.returncode != 0
-    assert "Astra-only" in result.stderr
+    assert "Prepared execution" in result.stderr
     workflow = json.loads(
         (artifact_root / "workflow_wf-cli-spawn.json").read_text(encoding="utf-8")
     )

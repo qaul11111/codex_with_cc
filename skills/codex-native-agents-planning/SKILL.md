@@ -1,6 +1,6 @@
 ---
 name: codex-native-agents-planning
-description: Decide whether authorized development should stay in main or use native Astra workers, then define dependencies, access scopes, effort and acceptance risk.
+description: Choose direct work or native GPT-6 workers for authorized development, then define dependencies, access scopes, model effort and acceptance risk.
 ---
 
 # Native Agent Planning
@@ -11,7 +11,8 @@ work. A split needs a concrete result and useful work that can proceed independe
 
 For a useful split, choose standard or strict before initialization. Map dependencies,
 read/write access and main-owned integration files. Register producers first.
-Choose role/complexity for effort; all routes use Astra. Estimate dispatch/review
+Choose role/complexity for the Luna/Sol/Astra route and inspect actual host support.
+Use an explicit profile only to honor a deliberate model choice. Estimate dispatch/review
 cost and stop splitting when it exceeds expected saved time. The `advise` command
 can record this reasoning without creating a workflow.
 

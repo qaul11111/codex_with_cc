@@ -1,5 +1,8 @@
 # Native-only adaptive execution verification
 
+Historical Astra-only baseline. The later GPT-6 three-model routing changes and
+their evidence are recorded in [GPT6-ROUTING-VERIFICATION.md](GPT6-ROUTING-VERIFICATION.md).
+
 Date: 2026-09-07. Branch: `codex/native-only`; base commit: `08a51d9`.
 Development checkout: `/Users/wxl/Documents/DevProject/GPTProject/CodexWithCC-native-only`.
 The original `CodexWithCC` checkout remains on its prior branch with its existing changes.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
@@ -19,6 +20,7 @@ from .workflow import (
     write_workflow,
 )
 from .task_contract import validate_task_file
+from .routing import route_for_task
 from . import evidence, planning
 
 
@@ -55,6 +57,16 @@ def build_parser() -> argparse.ArgumentParser:
     advise.add_argument("--estimated-minutes", type=float, required=True)
     advise.add_argument("--overhead-minutes", type=float, default=2)
 
+    route = subparsers.add_parser(
+        "route", help="Inspect a route without creating or dispatching a workflow"
+    )
+    route.add_argument("--role", required=True)
+    route.add_argument("--complexity", default="normal")
+    route.add_argument("--host-capabilities", type=Path, required=True)
+    route.add_argument(
+        "--model-profile", help="Explicit fixed profile; unavailable profiles return to main"
+    )
+
     for command in (
         "ready",
         "prepare-spawn",
@@ -87,7 +99,10 @@ def build_parser() -> argparse.ArgumentParser:
     register.add_argument("--scope", action="append", required=True)
     register.add_argument("--writable", action="store_true")
     register.add_argument("--parallel", action="store_true")
-    register.add_argument("--model-profile")
+    register.add_argument(
+        "--model-profile",
+        help="User-selected fixed profile; no automatic replacement or escalation",
+    )
     register.add_argument("--complexity", default="normal")
     register.add_argument("--review-for-task-id")
     register.add_argument("--review-kind")
@@ -132,6 +147,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     artifact_root = getattr(args, "artifact_root", DEFAULT_ARTIFACT_ROOT)
     try:
+        if args.command == "route":
+            host = evidence.capabilities(args.host_capabilities)
+            route = route_for_task(
+                args.role,
+                args.complexity,
+                capabilities=host["models"],
+                model_profile=args.model_profile,
+            )
+            print(json.dumps(asdict(route), indent=2))
+            return 0
         if args.command == "advise":
             print(
                 json.dumps(

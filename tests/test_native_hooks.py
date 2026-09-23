@@ -66,7 +66,7 @@ def compliant_spawn() -> dict[str, object]:
         "tool_input": {
             "message": task_envelope(),
             "fork_context": False,
-            "model": "gpt-6-astra",
+            "model": "gpt-6-sol",
             "reasoning_effort": "medium",
         },
     }
@@ -189,12 +189,35 @@ def test_other_model_override_is_rejected(run_hook, compliant_spawn) -> None:
     assert isinstance(payload, dict)
     payload["model"] = "any-current-host-model"
 
-    assert "Astra profile" in denied(run_hook(compliant_spawn))
+    assert "prepared profile" in denied(run_hook(compliant_spawn))
 
 
 def test_implicit_model_inheritance_is_rejected(run_hook, compliant_spawn) -> None:
     compliant_spawn["tool_input"].pop("model")
-    assert "Astra profile" in denied(run_hook(compliant_spawn))
+    assert "prepared profile" in denied(run_hook(compliant_spawn))
+
+
+@pytest.mark.parametrize(
+    ("profile", "model", "effort"),
+    [
+        ("economy", "gpt-6-luna", "low"),
+        ("balanced", "gpt-6-sol", "medium"),
+        ("balancedHigh", "gpt-6-sol", "high"),
+        ("frontier", "gpt-6-astra", "xhigh"),
+    ],
+)
+def test_profile_dispatch_preserves_exact_model_and_effort(
+    run_hook, compliant_spawn, profile, model, effort
+) -> None:
+    payload = compliant_spawn["tool_input"]
+    payload.update(message=task_envelope(ModelProfile=profile), model=model,
+                   reasoning_effort=effort)
+    assert run_hook(compliant_spawn) == {}
+    payload["reasoning_effort"] = "max"
+    assert "prepared profile" in denied(run_hook(compliant_spawn))
+    payload["reasoning_effort"] = effort
+    payload["model"] = model.replace("gpt-6-", "gpt-5.6-")
+    assert "prepared profile" in denied(run_hook(compliant_spawn))
 
 
 def test_namespaced_spawn_agent_is_validated_by_tail(run_hook, compliant_spawn) -> None:

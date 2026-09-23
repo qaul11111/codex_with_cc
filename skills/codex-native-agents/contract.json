@@ -22,15 +22,15 @@
   },
   "modelProfiles": {
     "economy": {
-      "model": "gpt-6-astra",
+      "model": "gpt-6-luna",
       "reasoningEffort": "low"
     },
     "balanced": {
-      "model": "gpt-6-astra",
+      "model": "gpt-6-sol",
       "reasoningEffort": "medium"
     },
     "balancedHigh": {
-      "model": "gpt-6-astra",
+      "model": "gpt-6-sol",
       "reasoningEffort": "high"
     },
     "frontier": {
@@ -39,9 +39,9 @@
     }
   },
   "roleProfiles": {
-    "planner": "balancedHigh",
+    "planner": "balanced",
     "implementer": "balanced",
-    "researcher": "economy",
+    "researcher": "balanced",
     "reviewer": "balancedHigh",
     "final-verifier": "frontier"
   },

@@ -1,5 +1,6 @@
 """Offline fixtures for admission, evidence and acceptance; no model is invoked."""
 
+import copy
 import json
 import subprocess
 import sys
@@ -43,7 +44,11 @@ def managed(tmp_path, monkeypatch):
         "source": "active-tool-catalog",
         "tools": ["spawn_agent", "list_agents", "wait_agent"],
         "forkParameter": "fork_turns",
-        "models": {"gpt-6-astra": ["low", "medium", "high", "xhigh"]},
+        "models": {
+            "gpt-6-astra": ["low", "medium", "high", "xhigh"],
+            "gpt-6-sol": ["low", "medium", "high", "xhigh"],
+            "gpt-6-luna": ["low", "medium", "high", "xhigh"],
+        },
         "maxAgents": 3,
         "lifecycle": "terminal-evidence",
     }
@@ -79,11 +84,11 @@ def register(
     )
 
 
-def transcript(managed, task_id, agent, *, effort=None, aborted=False):
+def transcript(managed, task_id, agent, *, effort=None, aborted=False, status="DONE"):
     flow, project, root, home = managed
     task = flow["tasks"][task_id]
     now = datetime.now(timezone.utc).isoformat()
-    report = compliant_native_report("DONE", task["role"])
+    report = compliant_native_report(status, task["role"])
     rows = [
         {
             "type": "session_meta",
@@ -97,7 +102,7 @@ def transcript(managed, task_id, agent, *, effort=None, aborted=False):
         {
             "type": "turn_context",
             "payload": {
-                "model": "gpt-6-astra",
+                "model": task["requestedModel"],
                 "effort": effort or task["reasoningEffort"],
             },
         },
@@ -127,7 +132,7 @@ def transcript(managed, task_id, agent, *, effort=None, aborted=False):
 def finish(managed, task_id="work", agent="agent"):
     flow = managed[0]
     planning.prepare_spawn(flow, task_id)
-    w.record_spawn(flow, task_id=task_id, agent_id=agent, actual_model="gpt-6-astra")
+    w.record_spawn(flow, task_id=task_id, agent_id=agent, actual_model=flow["tasks"][task_id]["requestedModel"])
     path, report = transcript(managed, task_id, agent)
     w.record_run(
         flow, task_id=task_id, agent_id=agent, report=report, transcript_path=path
@@ -150,7 +155,7 @@ def test_current_host_fork_turns_and_conflicting_context():
         "tool_input": {
             "message": task_envelope(),
             "fork_turns": "none",
-            "model": "gpt-6-astra",
+            "model": "gpt-6-sol",
             "reasoning_effort": "medium",
         },
     }
@@ -219,7 +224,8 @@ def test_final_snapshot_is_fixed_at_dispatch():
 @pytest.mark.parametrize(
     "complexity,independent,coupled,minutes,execution",
     [
-        ("simple", True, False, 10, "main"),
+        ("simple", True, False, 10, "native"),
+        ("simple", True, False, 1, "main"),
         ("complex", True, True, 30, "main"),
         ("normal", False, False, 20, "main"),
         ("normal", True, False, 1, "main"),
@@ -266,7 +272,7 @@ def test_main_reserved_scope_and_unsupported_effort_block_dispatch(managed):
     with pytest.raises(ValueError, match="main-thread"):
         planning.prepare_spawn(managed[0], "work")
     managed[0]["policy"]["mainScopes"] = []
-    managed[0]["policy"]["host"]["models"]["gpt-6-astra"] = ["low"]
+    managed[0]["policy"]["host"]["models"]["gpt-6-sol"] = ["low"]
     with pytest.raises(ValueError, match="effort unavailable"):
         planning.prepare_spawn(managed[0], "work")
 
@@ -332,7 +338,7 @@ def test_actual_effort_mismatch_and_aborted_completion_rejected(managed):
     flow = managed[0]
     register(managed)
     planning.prepare_spawn(flow, "work")
-    w.record_spawn(flow, task_id="work", agent_id="agent", actual_model="gpt-6-astra")
+    w.record_spawn(flow, task_id="work", agent_id="agent", actual_model=flow["tasks"]["work"]["requestedModel"])
     path, report = transcript(managed, "work", "agent", effort="low")
     with pytest.raises(ValueError, match="reasoning effort"):
         w.record_run(
@@ -358,18 +364,18 @@ def test_false_closed_claim_and_changed_host_log_rejected(managed):
     register(managed)
     path = finish(managed)
     saved = flow["tasks"]["work"]["latestClose"]["terminalEvidence"]
-    path.write_text(path.read_text().replace("gpt-6-astra", "other-model"))
+    path.write_text(path.read_text().replace(flow["tasks"]["work"]["requestedModel"], "other-model"))
     with pytest.raises(ValueError, match="evidence changed"):
         evidence.recheck_terminal(saved, flow["policy"]["projectRoot"])
 
 
-def test_non_astra_fallback_and_missing_preparation_rejected(managed):
+def test_unprepared_route_and_model_substitution_rejected(managed):
     flow = managed[0]
     register(managed)
     with pytest.raises(ValueError, match="prepare-spawn"):
-        w.record_spawn(flow, task_id="work", agent_id="a", actual_model="gpt-6-astra")
+        w.record_spawn(flow, task_id="work", agent_id="a", actual_model=flow["tasks"]["work"]["requestedModel"])
     planning.prepare_spawn(flow, "work")
-    with pytest.raises(ValueError, match="Astra-only"):
+    with pytest.raises(ValueError, match="Prepared execution"):
         w.record_spawn(
             flow,
             task_id="work",
@@ -384,7 +390,7 @@ def test_strict_lifecycle_does_not_accept_a_typed_close_claim(managed):
     flow["policy"]["host"]["lifecycle"] = "strict-close"
     register(managed)
     planning.prepare_spawn(flow, "work")
-    w.record_spawn(flow, task_id="work", agent_id="agent", actual_model="gpt-6-astra")
+    w.record_spawn(flow, task_id="work", agent_id="agent", actual_model=flow["tasks"]["work"]["requestedModel"])
     path, report = transcript(managed, "work", "agent")
     with pytest.raises(ValueError, match="close_agent result"):
         w.record_close(
@@ -452,11 +458,11 @@ def test_terminal_prefix_tolerates_unrelated_append_but_not_new_turn(managed):
         evidence.recheck_terminal(saved, flow["policy"]["projectRoot"])
 
 
-def test_retry_escalates_effort_once_and_gets_unique_task_name(managed):
+def test_retry_escalates_model_once_and_gets_unique_task_name(managed):
     flow = managed[0]
     register(managed)
     first = planning.prepare_spawn(flow, "work")
-    w.record_spawn(flow, task_id="work", agent_id="a", actual_model="gpt-6-astra")
+    w.record_spawn(flow, task_id="work", agent_id="a", actual_model=flow["tasks"]["work"]["requestedModel"])
     path, _ = transcript(managed, "work", "a", aborted=True)
     w.record_close(
         flow, task_id="work", agent_id="a", status="unsupported", transcript_path=path
@@ -464,9 +470,10 @@ def test_retry_escalates_effort_once_and_gets_unique_task_name(managed):
     second = planning.prepare_spawn(flow, "work", escalate=True)
     assert second["task_name"] != first["task_name"]
     assert (
-        first["reasoning_effort"] == "medium" and second["reasoning_effort"] == "high"
+        first["model"] == "gpt-6-sol" and second["model"] == "gpt-6-astra"
+        and first["reasoning_effort"] == "medium" and second["reasoning_effort"] == "xhigh"
     )
-    w.record_spawn(flow, task_id="work", agent_id="b", actual_model="gpt-6-astra")
+    w.record_spawn(flow, task_id="work", agent_id="b", actual_model=flow["tasks"]["work"]["requestedModel"])
     path, _ = transcript(managed, "work", "b", aborted=True)
     w.record_close(
         flow, task_id="work", agent_id="b", status="unsupported", transcript_path=path
@@ -480,7 +487,7 @@ def test_close_agent_receipt_binds_original_parent_and_child(managed):
     flow["policy"]["host"]["lifecycle"] = "strict-close"
     register(managed)
     planning.prepare_spawn(flow, "work")
-    w.record_spawn(flow, task_id="work", agent_id="agent", actual_model="gpt-6-astra")
+    w.record_spawn(flow, task_id="work", agent_id="agent", actual_model=flow["tasks"]["work"]["requestedModel"])
     path, report = transcript(managed, "work", "agent")
     w.record_run(
         flow, task_id="work", agent_id="agent", report=report, transcript_path=path
@@ -569,3 +576,214 @@ def test_readers_cannot_overlap_main_owned_writes(managed):
     register(managed, role="researcher", writable=False)
     with pytest.raises(ValueError, match="main-thread"):
         planning.prepare_spawn(flow, "work")
+
+
+def test_available_catalog_is_recorded_without_model_alias_substitution(managed):
+    flow = managed[0]
+    flow["policy"]["host"]["models"] = {
+        "gpt-5.6-sol": ["low", "medium", "high"],
+        "gpt-5.6-luna": ["low", "medium"],
+        "gpt-6-astra": ["xhigh"],
+    }
+    task = register(managed, role="researcher", writable=False, complexity="simple")
+    assert task["preferredModelProfile"] == "economy"
+    assert task["modelProfile"] == "frontier"
+    assert task["requestedModel"] == "gpt-6-astra"
+    assert task["modelProfileOverride"] is None
+    assert task["routingReason"]
+    payload = planning.prepare_spawn(flow, "work")
+    assert payload["model"] == "gpt-6-astra"
+    assert task["prepared"]["routing"]["preferredModelProfile"] == "economy"
+
+
+def test_no_supported_route_returns_to_main_without_registering_blocked_work(managed):
+    flow = managed[0]
+    flow["policy"]["host"]["models"] = {"gpt-5.6-sol": ["medium"]}
+    before = copy.deepcopy(flow)
+    with pytest.raises(ValueError, match="return to main"):
+        register(managed)
+    assert flow == before
+    assert flow["tasks"] == {}
+
+
+def test_explicit_unavailable_profile_is_preserved_without_stronger_replacement(managed):
+    flow = managed[0]
+    del flow["policy"]["host"]["models"]["gpt-6-sol"]
+    before = copy.deepcopy(flow)
+    with pytest.raises(ValueError, match="return to main"):
+        register(managed, model_profile="balanced")
+    assert flow == before
+
+
+def test_explicit_profile_does_not_escalate_after_interruption(managed):
+    flow = managed[0]
+    task = register(managed, model_profile="balanced")
+    payload = planning.prepare_spawn(flow, "work")
+    w.record_spawn(flow, task_id="work", agent_id="first", actual_model=payload["model"])
+    path, _ = transcript(managed, "work", "first", aborted=True)
+    w.record_close(flow, task_id="work", agent_id="first", status="unsupported", transcript_path=path)
+    before = copy.deepcopy(flow)
+    with pytest.raises(ValueError, match="Explicit model profile is fixed"):
+        planning.prepare_spawn(flow, "work", escalate=True)
+    assert flow == before
+    assert task["modelProfileOverride"] == "balanced"
+
+
+def test_failed_escalation_preparation_is_atomic(managed):
+    flow = managed[0]
+    task = register(managed)
+    payload = planning.prepare_spawn(flow, "work")
+    w.record_spawn(flow, task_id="work", agent_id="first", actual_model=payload["model"])
+    path, _ = transcript(managed, "work", "first", aborted=True)
+    w.record_close(flow, task_id="work", agent_id="first", status="unsupported", transcript_path=path)
+    Path(task["taskFile"]).write_text("changed task")
+    before = copy.deepcopy(flow)
+    with pytest.raises(ValueError, match="Registered TaskFile changed"):
+        planning.prepare_spawn(flow, "work", escalate=True)
+    assert flow == before
+    assert task["requestedModel"] == "gpt-6-sol"
+
+
+def test_each_attempt_retains_its_model_effort_and_route_evidence(managed):
+    flow = managed[0]
+    task = register(managed, role="researcher", writable=False, complexity="simple")
+    first = planning.prepare_spawn(flow, "work")
+    w.record_spawn(flow, task_id="work", agent_id="first", actual_model=first["model"])
+    path, report = transcript(managed, "work", "first", status="FAIL")
+    first_run = w.record_run(flow, task_id="work", agent_id="first", report=report, transcript_path=path)
+    w.record_close(flow, task_id="work", agent_id="first", status="unsupported", transcript_path=path)
+    second = planning.prepare_spawn(flow, "work", escalate=True)
+    second_spawn = w.record_spawn(flow, task_id="work", agent_id="second", actual_model=second["model"])
+    assert (first["model"], first["reasoning_effort"]) == ("gpt-6-luna", "low")
+    assert (second["model"], second["reasoning_effort"]) == ("gpt-6-sol", "medium")
+    assert first_run["requestedModel"] == "gpt-6-luna"
+    assert first_run["reasoningEffort"] == "low"
+    assert first_run["spawn"]["prepared"]["routing"]["model"] == "gpt-6-luna"
+    assert second_spawn["requestedModel"] == "gpt-6-sol"
+    assert second_spawn["preferredModelProfile"] == "economy"
+    assert task["modelProfile"] == "balanced"
+
+
+def test_preparation_rechecks_model_availability_without_mutation(managed):
+    flow = managed[0]
+    task = register(managed)
+    del flow["policy"]["host"]["models"]["gpt-6-sol"]
+    before = copy.deepcopy(flow)
+    with pytest.raises(ValueError, match="Model/effort unavailable"):
+        planning.prepare_spawn(flow, "work")
+    assert flow == before
+    assert task["requestedModel"] == "gpt-6-sol"
+
+
+def test_changed_route_after_preparation_is_rejected(managed):
+    flow = managed[0]
+    task = register(managed)
+    planning.prepare_spawn(flow, "work")
+    task["requestedModel"] = "gpt-6-astra"
+    with pytest.raises(ValueError, match="route changed after preparation"):
+        w.record_spawn(flow, task_id="work", agent_id="agent", actual_model="gpt-6-astra")
+    assert task["latestSpawn"] is None
+
+
+@pytest.mark.parametrize("models", [None, [], {"": ["low"]}, {"gpt-6-sol": "medium"}, {"gpt-6-sol": [3]}, {"gpt-6-sol": [["medium"]]}, {"gpt-6-sol": ["medium", "medium"]}])
+def test_malformed_model_catalog_is_rejected(managed, models):
+    caps = copy.deepcopy(managed[0]["policy"]["host"])
+    caps["models"] = models
+    with pytest.raises(ValueError, match="Host models"):
+        evidence.validate_capabilities(caps)
+
+
+def test_catalog_accepts_luna_only_and_unknown_models(managed):
+    caps = copy.deepcopy(managed[0]["policy"]["host"])
+    caps["models"] = {"gpt-6-luna": ["low"], "future-model": ["future-effort"]}
+    assert evidence.validate_capabilities(caps)["models"] == caps["models"]
+
+
+def test_route_cli_is_read_only_and_respects_explicit_selection(managed, capsys):
+    flow, project, root, _ = managed
+    caps = root / "caps.json"
+    caps.write_text(json.dumps(flow["policy"]["host"]))
+    before = sorted(project.rglob("*"))
+    assert main(["route", "--role", "researcher", "--complexity", "simple", "--host-capabilities", str(caps)]) == 0
+    route = json.loads(capsys.readouterr().out)
+    assert route["model"] == "gpt-6-luna"
+    assert route["reasoning_effort"] == "low"
+    assert route["preferred_profile"] == "economy"
+    assert route["reason"]
+    assert sorted(project.rglob("*")) == before
+    caps.write_text(json.dumps({**flow["policy"]["host"], "models": {"gpt-6-astra": ["xhigh"]}}))
+    assert main(["route", "--role", "implementer", "--host-capabilities", str(caps), "--model-profile", "balanced"]) == 0
+    route = json.loads(capsys.readouterr().out)
+    assert route["model"] is None
+    assert route["fallback"] == "main_thread"
+    assert not list(root.glob("workflow_*.json"))
+
+
+@pytest.mark.parametrize("at_frontier", [False, True])
+def test_no_available_escalation_keeps_original_attempt_and_route(managed, at_frontier):
+    flow = managed[0]
+    task = register(
+        managed,
+        role="planner" if at_frontier else "implementer",
+        writable=not at_frontier,
+        complexity="complex" if at_frontier else "normal",
+    )
+    first = planning.prepare_spawn(flow, "work")
+    w.record_spawn(
+        flow, task_id="work", agent_id="first", actual_model=first["model"]
+    )
+    path, _ = transcript(managed, "work", "first", aborted=True)
+    w.record_close(
+        flow,
+        task_id="work",
+        agent_id="first",
+        status="unsupported",
+        transcript_path=path,
+    )
+    if not at_frontier:
+        del flow["policy"]["host"]["models"]["gpt-6-astra"]
+    before = copy.deepcopy(flow)
+    with pytest.raises(ValueError, match="return to main"):
+        planning.prepare_spawn(flow, "work", escalate=True)
+    assert flow == before
+    assert planning.ready_tasks(flow)["ready"] == []
+    assert planning.ready_tasks(flow)["requiresEscalation"] == []
+    assert len(task["spawnAttempts"]) == 1
+    assert task["prepared"] is None
+
+
+@pytest.mark.parametrize("profile", [None, "balanced", "frontier"])
+def test_retry_cannot_bypass_escalation_and_ready_reports_required_action(managed, profile):
+    flow = managed[0]
+    task = register(managed, model_profile=profile)
+    first = planning.prepare_spawn(flow, "work")
+    w.record_spawn(flow, task_id="work", agent_id="first", actual_model=first["model"])
+    path, _ = transcript(managed, "work", "first", aborted=True)
+    w.record_close(
+        flow, task_id="work", agent_id="first", status="unsupported", transcript_path=path
+    )
+    before = copy.deepcopy(flow)
+    with pytest.raises(ValueError, match="retry requires --escalate"):
+        planning.prepare_spawn(flow, "work")
+    assert flow == before
+    ready = planning.ready_tasks(flow)
+    assert ready["ready"] == []
+    assert ready["requiresEscalation"] == (["work"] if profile is None else [])
+    assert task["prepared"] is None
+
+
+def test_escalation_wave_reserves_the_same_concurrency_slots(managed):
+    flow = managed[0]
+    flow["policy"]["host"]["maxAgents"] = 1
+    register(managed, parallel=True)
+    first = planning.prepare_spawn(flow, "work")
+    w.record_spawn(flow, task_id="work", agent_id="first", actual_model=first["model"])
+    path, _ = transcript(managed, "work", "first", aborted=True)
+    w.record_close(
+        flow, task_id="work", agent_id="first", status="unsupported", transcript_path=path
+    )
+    register(managed, "next", role="researcher", scopes=("docs",), writable=False, parallel=True)
+    wave = planning.ready_tasks(flow)
+    assert wave["requiresEscalation"] == ["work"]
+    assert wave["ready"] == []
+    assert "concurrency limit" in wave["blocked"]["next"]

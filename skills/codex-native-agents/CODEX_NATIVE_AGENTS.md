@@ -9,8 +9,11 @@ short or coupled tasks stay in main without workflow overhead.
 
 ## Invariants
 
-- Native Astra only; profiles in contract.json select effort by role/complexity.
-  Unsupported models/efforts return control to main. No silent model inheritance.
+- Native GPT-6 Astra, Sol and Luna; contract.json selects model and effort by
+  role/complexity, then filters using the active host's exact capabilities.
+  Automatic routes can move to stronger supported profiles and record why.
+  Explicit profile choices remain pinned. If no route is supported, return to
+  main. Never substitute GPT-5.6 IDs or silently inherit the parent's model.
 - New workflows explicitly select standard or strict and record a real host
   capability snapshot. Historical records without policy retain strict semantics;
   they are not automatically promoted to the new evidence model.
@@ -23,6 +26,9 @@ short or coupled tasks stay in main without workflow overhead.
 - Every attempt records the actual returned agent ID. Record its original host
   final report, model and effort. A new attempt needs the previous terminal
   settlement first; at most two attempts are dispatched per task.
+- Automatic failed attempts may escalate once along the explicit profile chain.
+  A pinned profile needs explicit replanning; missing inputs or permissions need
+  resolution, not escalation. Preserve each attempt's original route and reason.
 - With close_agent, keep original successful close tool evidence. Without it,
   original terminal events prove execution stopped, and closure is unsupported.
   interrupt_agent is never proof of host closure.

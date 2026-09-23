@@ -26,7 +26,6 @@ def advise(
     direct = (
         coupled
         or not independent
-        or complexity == "simple"
         or estimated_minutes <= overhead_minutes
     )
     return {
@@ -108,28 +107,50 @@ def blockers(workflow: dict, task: dict) -> list[str]:
 
 def ready_tasks(workflow: dict) -> dict:
     import copy
+    from .routing import escalate_route
 
     simulation = copy.deepcopy(workflow)
-    ready, blocked = [], {}
+    ready, blocked, requires_escalation = [], {}, []
     for task in simulation["tasks"].values():
         if active(task) or task.get("latestReportStatus") == "DONE":
             continue
         reasons = blockers(simulation, task)
+        if task.get("fallback") == "main_thread" or not task.get("requestedModel"):
+            reasons.append(
+                "main_thread: " + (task.get("routingReason") or "No available route")
+            )
+        if len(task["spawnAttempts"]) >= 2:
+            reasons.append("Retry budget exhausted; return control to main")
+        elif task["spawnAttempts"]:
+            if task.get("modelProfileOverride"):
+                reasons.append("Explicit model profile is fixed; return to main")
+            else:
+                route = escalate_route(
+                    task["modelProfile"],
+                    capabilities=(simulation.get("policy") or {}).get("host", {}).get("models", {}),
+                )
+                if route.model is None:
+                    reasons.append("main_thread: " + route.reason)
         if reasons:
             blocked[task["taskId"]] = reasons
         else:
-            ready.append(task["taskId"])
+            if task["spawnAttempts"]:
+                requires_escalation.append(task["taskId"])
+            else:
+                ready.append(task["taskId"])
             task["prepared"] = {"reservation": True}
     return {
         "ready": ready,
         "blocked": blocked,
-        "instruction": "Prepare and spawn this ready wave before waiting; recompute after completions.",
+        "requiresEscalation": requires_escalation,
+        "instruction": "Prepare ready tasks normally and requiresEscalation tasks with --escalate; both share this wave's slots and scopes. Spawn the wave before waiting, then recompute after completions.",
     }
 
 
 def prepare_spawn(workflow: dict, task_id: str, *, escalate: bool = False) -> dict:
     from .workflow import _acceptance_snapshot, _now
     from .contract import load_contract
+    from .routing import escalate_route
 
     policy = workflow.get("policy")
     if not policy:
@@ -141,30 +162,52 @@ def prepare_spawn(workflow: dict, task_id: str, *, escalate: bool = False) -> di
         raise ContractError("Task is already prepared or running")
     if len(task["spawnAttempts"]) >= 2:
         raise ContractError("Retry budget exhausted; return control to main")
+    if task["spawnAttempts"] and not escalate:
+        raise ContractError(
+            "A retry requires --escalate; return to main when no stronger route is available"
+        )
     reasons = blockers(workflow, task)
     if reasons:
         raise ContractError("Task cannot dispatch: " + ", ".join(reasons))
     if not policy.get("host"):
         raise ContractError("Host capabilities are required before dispatch")
+    host = evidence.validate_capabilities(policy["host"])
+    candidate = dict(task)
     if escalate:
         if len(task["spawnAttempts"]) != 1 or task.get("latestReportStatus") == "DONE":
             raise ContractError(
                 "Escalation requires exactly one failed or interrupted attempt"
             )
-        profiles = list(load_contract()["modelProfiles"])
-        index = profiles.index(task["modelProfile"])
-        selected = profiles[min(index + 1, len(profiles) - 1)]
-        route = load_contract()["modelProfiles"][selected]
-        if route["reasoningEffort"] not in policy["host"]["models"]["gpt-6-astra"]:
-            raise ContractError("Escalated Astra effort unavailable")
-        task.update(
-            modelProfile=selected,
-            requestedModel=route["model"],
-            reasoningEffort=route["reasoningEffort"],
+        if task.get("modelProfileOverride"):
+            raise ContractError(
+                "Explicit model profile is fixed; return to main for an authorized replan"
+            )
+        route = escalate_route(task["modelProfile"], capabilities=host["models"])
+        candidate.update(
+            modelProfile=route.profile,
+            requestedModel=route.model,
+            reasoningEffort=route.reasoning_effort,
+            fallback=route.fallback,
+            routingReason=route.reason,
         )
-    if task["reasoningEffort"] not in policy["host"]["models"]["gpt-6-astra"]:
+    if candidate.get("fallback") == "main_thread" or not candidate["requestedModel"]:
         raise ContractError(
-            "Astra effort unavailable; keep work in main or explicitly replan"
+            "No native route; return to main. " + candidate.get("routingReason", "")
+        )
+    expected_route = load_contract()["modelProfiles"].get(candidate["modelProfile"])
+    if not expected_route or (
+        candidate["requestedModel"],
+        candidate["reasoningEffort"],
+    ) != (expected_route["model"], expected_route["reasoningEffort"]):
+        raise ContractError(
+            "Registered route differs from the current contract; start a new workflow"
+        )
+    if candidate["reasoningEffort"] not in host["models"].get(
+        candidate["requestedModel"], []
+    ):
+        raise ContractError(
+            f"Model/effort unavailable: {candidate['requestedModel']} / "
+            f"{candidate['reasoningEffort']}; return to main or explicitly replan"
         )
     expected_review = None
     if task["role"] == "reviewer":
@@ -191,8 +234,17 @@ def prepare_spawn(workflow: dict, task_id: str, *, escalate: bool = False) -> di
         "reviewedRunId": expected_review,
         "acceptanceSnapshot": final_snapshot,
         "source": evidence.snapshot(policy["projectRoot"], policy["artifactRoot"]),
+        "routing": {
+            "preferredModelProfile": candidate.get(
+                "preferredModelProfile", candidate["modelProfile"]
+            ),
+            "modelProfile": candidate["modelProfile"],
+            "model": candidate["requestedModel"],
+            "reasoningEffort": candidate["reasoningEffort"],
+            "modelProfileOverride": candidate.get("modelProfileOverride"),
+            "reason": candidate.get("routingReason"),
+        },
     }
-    task["prepared"] = prepared
     lines = [
         "[NATIVE_CODEX_AGENT_TASK]",
         f"WorkflowId: {workflow['workflowId']}",
@@ -200,7 +252,7 @@ def prepare_spawn(workflow: dict, task_id: str, *, escalate: bool = False) -> di
         f"Role: {task['role']}",
         f"TaskFile: {task_file}",
         f"Scope: {','.join(task['scopes'])}",
-        f"ModelProfile: {task['modelProfile']}",
+        f"ModelProfile: {candidate['modelProfile']}",
         f"Writable: {str(task['writable']).lower()}",
         f"Parallel: {str(task['parallel']).lower()}",
         "DispatcherRole: main",
@@ -216,9 +268,11 @@ def prepare_spawn(workflow: dict, task_id: str, *, escalate: bool = False) -> di
         + "_"
         + evidence.fingerprint(prepared)[:10],
         "message": "\n".join(lines),
-        "model": task["requestedModel"],
-        "reasoning_effort": task["reasoningEffort"],
+        "model": candidate["requestedModel"],
+        "reasoning_effort": candidate["reasoningEffort"],
     }
     parameter = policy["host"]["forkParameter"]
     payload[parameter] = "none" if parameter == "fork_turns" else False
+    candidate["prepared"] = prepared
+    task.update(candidate)
     return payload

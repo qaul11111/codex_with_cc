@@ -97,9 +97,17 @@ def _validate_started_at(started_at: str | None) -> str | None:
     return started_at
 
 
-def _route(role: str, complexity: str) -> Any:
+def _route(
+    role: str,
+    complexity: str,
+    *,
+    capabilities: dict | None = None,
+    model_profile: str | None = None,
+) -> Any:
     try:
-        return route_for_task(role, complexity)
+        return route_for_task(
+            role, complexity, capabilities=capabilities, model_profile=model_profile
+        )
     except KeyError as error:
         raise WorkflowError(f"Unsupported worker role: {role}") from error
 
@@ -125,6 +133,7 @@ def new_workflow(
             )
         if project.is_relative_to(artifact_root.resolve()):
             raise WorkflowError("Artifact root cannot contain the project")
+        host = evidence.validate_capabilities(host)
         policy = {
             "projectRoot": str(project),
             "artifactRoot": str(artifact_root.resolve()),
@@ -202,9 +211,15 @@ def register_task(
         and workflow["policy"]["profile"] != "strict"
     ):
         raise WorkflowError("High-risk tasks require a strict workflow")
-    route = _route(role, complexity)
-    if model_profile is not None and model_profile != route.profile:
-        raise WorkflowError(f"Model profile must match routed profile: {route.profile}")
+    policy = workflow.get("policy")
+    route = _route(
+        role,
+        complexity,
+        capabilities=policy["host"]["models"] if policy else None,
+        model_profile=model_profile,
+    )
+    if route.model is None:
+        raise WorkflowError("No native route; return to main. " + route.reason)
 
     if writable and parallel:
         for registered_task in tasks.values():
@@ -250,6 +265,10 @@ def register_task(
         "dependsOn": dependencies,
         "prepared": None,
         "taskSections": sections,
+        "complexity": complexity,
+        "preferredModelProfile": route.preferred_profile or route.profile,
+        "modelProfileOverride": model_profile,
+        "routingReason": route.reason,
         "modelProfile": route.profile,
         "requestedModel": route.model,
         "reasoningEffort": route.reasoning_effort,
@@ -313,6 +332,13 @@ def record_spawn(
     if workflow.get("policy"):
         if not prepared:
             raise WorkflowError("prepare-spawn is required before recording dispatch")
+        prepared_route = prepared.get("routing")
+        if prepared_route and (
+            prepared_route["modelProfile"],
+            prepared_route["model"],
+            prepared_route["reasoningEffort"],
+        ) != (task["modelProfile"], task["requestedModel"], task["reasoningEffort"]):
+            raise WorkflowError("Task route changed after preparation; return to main")
         if task["role"] in {"reviewer", "final-verifier"}:
             implementer_agents = {
                 a["agentId"]
@@ -326,7 +352,7 @@ def record_spawn(
                 )
         if inherit_parent or actual_model != task["requestedModel"]:
             raise WorkflowError(
-                "Astra-only execution cannot inherit or silently change model"
+                "Prepared execution cannot inherit or silently change model"
             )
         from .planning import blockers
 
@@ -353,6 +379,9 @@ def record_spawn(
         "requestedProfile": task["modelProfile"],
         "requestedModel": task["requestedModel"],
         "requestedReasoningEffort": task["reasoningEffort"],
+        "preferredModelProfile": task.get("preferredModelProfile", task["modelProfile"]),
+        "modelProfileOverride": task.get("modelProfileOverride"),
+        "routingReason": task.get("routingReason"),
         "actualModel": None if inherit_parent else actual_model,
         "executionMode": "inherit_parent" if inherit_parent else "model",
         "fallbackReason": fallback_reason,
@@ -474,6 +503,9 @@ def record_run(
         "modelProfile": task["modelProfile"],
         "requestedModel": task["requestedModel"],
         "reasoningEffort": task["reasoningEffort"],
+        "preferredModelProfile": task.get("preferredModelProfile", task["modelProfile"]),
+        "modelProfileOverride": task.get("modelProfileOverride"),
+        "routingReason": task.get("routingReason"),
         "fallback": task["fallback"],
         "spawn": spawn,
         "reportStatus": parsed_report.status,

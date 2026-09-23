@@ -22,20 +22,36 @@ def fingerprint(value) -> str:
 
 def capabilities(path: Path) -> dict:
     data = json.loads(path.read_text())
+    return validate_capabilities(data)
+
+
+def validate_capabilities(data: dict) -> dict:
+    if not isinstance(data, dict):
+        raise ContractError("Host capabilities must be a JSON object")
     if data.get("source") != "active-tool-catalog":
         raise ContractError("Capabilities must come from the active-tool-catalog")
-    names = {name.replace("__", ".").split(".")[-1] for name in data.get("tools", [])}
+    tools = data.get("tools")
+    if not isinstance(tools, list) or any(
+        not isinstance(name, str) or not name.strip() for name in tools
+    ):
+        raise ContractError("Host tools must be a list of non-empty tool names")
+    names = {name.replace("__", ".").split(".")[-1] for name in tools}
     if not {"spawn_agent", "list_agents"}.issubset(names) or not names.intersection(
         {"wait_agent", "wait"}
     ):
         raise ContractError("Host needs native spawn, list and wait tools")
     if data.get("forkParameter") not in {"fork_turns", "fork_context"}:
         raise ContractError("Host must declare its actual forkParameter")
-    efforts = data.get("models", {}).get("gpt-6-astra", [])
-    if not efforts or any(
-        x not in {"low", "medium", "high", "xhigh", "max", "ultra"} for x in efforts
+    models = data.get("models")
+    if not isinstance(models, dict) or any(
+        not isinstance(model, str)
+        or not model.strip()
+        or not isinstance(efforts, list)
+        or any(not isinstance(effort, str) or not effort.strip() for effort in efforts)
+        or len(efforts) != len(set(efforts))
+        for model, efforts in models.items()
     ):
-        raise ContractError("Host must advertise supported Astra efforts")
+        raise ContractError("Host models must map model names to unique effort-name lists")
     if (
         not isinstance(data.get("maxAgents"), int)
         or isinstance(data["maxAgents"], bool)

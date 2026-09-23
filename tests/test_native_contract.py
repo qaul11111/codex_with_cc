@@ -18,7 +18,7 @@ def contract(repo: Path) -> dict[str, object]:
     )
 
 
-def test_model_profiles_use_astra_with_main_thread_fallback(
+def test_model_profiles_use_exact_gpt6_models_with_main_thread_fallback(
     contract: dict[str, object],
 ) -> None:
     spawn = contract["spawn"]
@@ -29,11 +29,11 @@ def test_model_profiles_use_astra_with_main_thread_fallback(
     assert spawn["forkContext"] is False
     assert spawn["fallbackPolicy"] == "main_thread"
     assert model_profiles["economy"] == {
-        "model": "gpt-6-astra",
+        "model": "gpt-6-luna",
         "reasoningEffort": "low",
     }
     assert model_profiles["balanced"] == {
-        "model": "gpt-6-astra",
+        "model": "gpt-6-sol",
         "reasoningEffort": "medium",
     }
     assert model_profiles["frontier"] == {
@@ -55,13 +55,13 @@ def test_native_contract_retains_the_approved_shared_fields(
         "forkTurns": "none",
     }
     assert contract["modelProfiles"]["balancedHigh"] == {
-        "model": "gpt-6-astra",
+        "model": "gpt-6-sol",
         "reasoningEffort": "high",
     }
     assert contract["roleProfiles"] == {
-        "planner": "balancedHigh",
+        "planner": "balanced",
         "implementer": "balanced",
-        "researcher": "economy",
+        "researcher": "balanced",
         "reviewer": "balancedHigh",
         "final-verifier": "frontier",
     }
