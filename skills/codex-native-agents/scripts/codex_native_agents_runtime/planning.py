@@ -80,6 +80,17 @@ def active(task: dict) -> bool:
     )
 
 
+def retry_blocker(task: dict) -> str | None:
+    status = task.get("latestReportStatus")
+    if status in {"NEEDS_CONTEXT", "BLOCKED"}:
+        return f"{status}: return to main to resolve inputs, environment or permissions; replan instead of escalating"
+    if status is None:
+        terminal = (task.get("latestClose") or {}).get("terminalEvidence") or {}
+        if terminal.get("event") != "turn_aborted":
+            return "Missing verified failure report or interruption; return to main"
+    return None
+
+
 def blockers(workflow: dict, task: dict) -> list[str]:
     problems = []
     for dep in task.get("dependsOn", []):
@@ -152,7 +163,10 @@ def ready_tasks(workflow: dict) -> dict:
         if len(task["spawnAttempts"]) >= 2:
             reasons.append("Retry budget exhausted; return control to main")
         elif task["spawnAttempts"]:
-            if task.get("modelProfileOverride"):
+            retry_problem = retry_blocker(task)
+            if retry_problem:
+                reasons.append(retry_problem)
+            elif task.get("modelProfileOverride"):
                 reasons.append("Explicit model profile is fixed; return to main")
             else:
                 route = escalate_route(
@@ -173,11 +187,14 @@ def ready_tasks(workflow: dict) -> dict:
         "ready": ready,
         "blocked": blocked,
         "requiresEscalation": requires_escalation,
-        "instruction": "Prepare ready tasks normally and requiresEscalation tasks with --escalate; both share this wave's slots and scopes. Spawn the wave before waiting, then recompute after completions.",
+        "instruction": "Prepare ready tasks normally. For requiresEscalation, diagnose first and supply --escalate --escalation-cause capability|quality --escalation-note with supporting evidence; these are candidates, not automatic retries. Both share this wave's slots and scopes. Spawn the wave before waiting, then recompute after completions.",
     }
 
 
-def prepare_spawn(workflow: dict, task_id: str, *, escalate: bool = False) -> dict:
+def prepare_spawn(
+    workflow: dict, task_id: str, *, escalate: bool = False,
+    escalation_cause: str | None = None, escalation_note: str | None = None,
+) -> dict:
     from .workflow import _acceptance_snapshot, _now
     from .contract import load_contract
     from .routing import escalate_route
@@ -187,6 +204,8 @@ def prepare_spawn(workflow: dict, task_id: str, *, escalate: bool = False) -> di
         raise ContractError("Use a new workflow with host capabilities before dispatch")
     if workflow.get("status") == "accepted":
         raise ContractError("Accepted workflows are immutable")
+    if not escalate and (escalation_cause is not None or escalation_note is not None):
+        raise ContractError("Escalation diagnosis requires --escalate")
     task = workflow["tasks"][task_id]
     if active(task):
         raise ContractError("Task is already prepared or running")
@@ -212,6 +231,9 @@ def prepare_spawn(workflow: dict, task_id: str, *, escalate: bool = False) -> di
             raise ContractError(
                 "Explicit model profile is fixed; return to main for an authorized replan"
             )
+        retry_problem = retry_blocker(task)
+        if retry_problem:
+            raise ContractError(retry_problem)
         route = escalate_route(task["modelProfile"], capabilities=host["models"])
         candidate.update(
             modelProfile=route.profile,
@@ -258,12 +280,26 @@ def prepare_spawn(workflow: dict, task_id: str, *, escalate: bool = False) -> di
     task_file = Path(task["taskFile"]).resolve()
     if evidence.digest(task_file) != task["taskSha256"]:
         raise ContractError("Registered TaskFile changed")
+    diagnosis = None
+    if escalate:
+        if escalation_cause not in {"capability", "quality"} or not (
+            isinstance(escalation_note, str) and escalation_note.strip()
+        ):
+            raise ContractError("Escalation requires a capability/quality cause and an evidence-based escalation note")
+        diagnosis = {
+            "cause": escalation_cause,
+            "note": escalation_note.strip(),
+            "previousRunId": task.get("lastRunId"),
+            "previousAgentId": task["latestSpawn"]["agentId"],
+            "previousStatus": task.get("latestReportStatus"),
+        }
     prepared = {
         "preparedAt": _now(),
         "taskSha256": task["taskSha256"],
         "reviewedRunId": expected_review,
         "acceptanceSnapshot": final_snapshot,
         "source": evidence.snapshot(policy["projectRoot"], policy["artifactRoot"]),
+        "escalationDiagnosis": diagnosis,
         "routing": {
             "preferredModelProfile": candidate.get(
                 "preferredModelProfile", candidate["modelProfile"]

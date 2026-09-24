@@ -221,12 +221,22 @@ def register_task(
     if route.model is None:
         raise WorkflowError("No native route; return to main. " + route.reason)
 
+    # Dependencies refer only to already registered tasks, so a new task cannot
+    # create a cycle. Permit shared writers only when they have a strict order.
+    ancestors = set()
+    pending = list(dependencies)
+    while pending:
+        ancestor = pending.pop()
+        if ancestor not in ancestors:
+            ancestors.add(ancestor)
+            pending.extend(tasks[ancestor].get("dependsOn", []))
     if writable and parallel:
         for registered_task in tasks.values():
             if (
                 registered_task["writable"]
                 and registered_task["parallel"]
                 and scopes_overlap(normalized_scopes, registered_task["scopes"])
+                and registered_task["taskId"] not in ancestors
             ):
                 raise WorkflowError("Parallel writable task scopes overlap")
 
@@ -826,6 +836,10 @@ def _validate_final_acceptance(
 
 def verify_workflow(workflow: dict[str, Any]) -> dict[str, Any]:
     _validate_workflow_structure(workflow)
+    if workflow.get("checkExecution"):
+        raise WorkflowError("Checks are still running or unresolved; run fresh checks before acceptance")
+    if workflow.get("checkFailure"):
+        raise WorkflowError("Checks failed or were cancelled; run fresh checks before acceptance")
     tasks = _workflow_tasks(workflow)
     runs = _workflow_runs(workflow)
     if not tasks:
@@ -1012,10 +1026,15 @@ def workflow_lock(
     workflow_id: str,
     timeout_seconds: float = 5.0,
     retry_seconds: float = 0.05,
-) -> Iterator[None]:
+    *,
+    purpose: str = "workflow",
+) -> Iterator[int]:
+    if purpose not in {"workflow", "checks"}:
+        raise WorkflowError("Unsupported lock purpose")
     path = workflow_path(artifact_root, workflow_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = path.with_name(f".{path.name}.lock")
+    suffix = ".lock" if purpose == "workflow" else ".checks.lock"
+    lock_path = path.with_name(f".{path.name}{suffix}")
     deadline = time.monotonic() + timeout_seconds
     descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     acquired = False
@@ -1030,7 +1049,8 @@ def workflow_lock(
                     os.lseek(descriptor, 0, os.SEEK_SET)
                     msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
                 else:
-                    # flock is process-owned kernel state on POSIX, so SIGKILL releases it.
+                    # Duplicated/inherited fds share the flock: the last close
+                    # releases it even when an owner exits without cleanup.
                     fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except (BlockingIOError, OSError):
                 if time.monotonic() >= deadline:
@@ -1039,7 +1059,7 @@ def workflow_lock(
             else:
                 acquired = True
                 break
-        yield
+        yield descriptor
     finally:
         if acquired and os.name == "nt":
             try:

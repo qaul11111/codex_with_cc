@@ -85,6 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
             operation.add_argument("--task-id", required=True)
         if command == "prepare-spawn":
             operation.add_argument("--escalate", action="store_true")
+            operation.add_argument("--escalation-cause", choices=("capability", "quality"))
+            operation.add_argument("--escalation-note", help="Observed evidence supporting a stronger-model retry")
         if command == "run-checks":
             operation.add_argument("--checks-file", type=Path, required=True)
         if command == "record-main-review":
@@ -183,6 +185,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             validate_task_file(args.task_file, args.role)
             print(args.task_file)
             return 0
+        if args.command == "ready":
+            # Workflow files are atomically replaced. This is an advisory view;
+            # prepare-spawn and record-spawn still recheck admission under lock.
+            print(json.dumps(planning.ready_tasks(load_workflow(artifact_root, args.workflow_id)), indent=2))
+            return 0
+        if args.command == "run-checks":
+            from .checks import check_cancellation, run_workflow_checks
+
+            with check_cancellation():
+                print(run_workflow_checks(artifact_root, args.workflow_id, args.checks_file))
+            return 0
         with workflow_lock(artifact_root, args.workflow_id):
             if args.command == "init":
                 if workflow_path(artifact_root, args.workflow_id).exists():
@@ -206,25 +219,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                     and workflow["status"] == "accepted"
                 ):
                     raise WorkflowError("Accepted workflows are immutable")
-                if args.command == "ready":
-                    print(json.dumps(planning.ready_tasks(workflow), indent=2))
-                    return 0
                 if args.command == "prepare-spawn":
                     payload = planning.prepare_spawn(
-                        workflow, args.task_id, escalate=args.escalate
+                        workflow, args.task_id, escalate=args.escalate,
+                        escalation_cause=args.escalation_cause,
+                        escalation_note=args.escalation_note,
                     )
                     write_workflow(artifact_root, workflow)
                     print(json.dumps(payload, indent=2))
                     return 0
-                if args.command == "run-checks":
-                    workflow.pop("checkEvidence", None)
-                    workflow.pop("mainReview", None)
-                    write_workflow(artifact_root, workflow)
-                    workflow["checkEvidence"] = evidence.run_checks(
-                        workflow, args.checks_file
-                    )
-                    workflow.pop("mainReview", None)
-                elif args.command == "record-main-review":
+                if args.command == "record-main-review":
+                    if workflow.get("checkExecution"):
+                        raise WorkflowError("Checks are still running or unresolved")
+                    if workflow.get("checkFailure"):
+                        raise WorkflowError("Checks failed or were cancelled; execute fresh checks")
                     identity = evidence.main_identity(workflow["policy"]["projectRoot"])
                     checks = workflow.get("checkEvidence")
                     if (

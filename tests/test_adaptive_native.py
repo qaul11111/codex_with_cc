@@ -600,7 +600,7 @@ def test_retry_escalates_model_once_and_gets_unique_task_name(managed):
     w.record_close(
         flow, task_id="work", agent_id="a", status="unsupported", transcript_path=path
     )
-    second = planning.prepare_spawn(flow, "work", escalate=True)
+    second = planning.prepare_spawn(flow, "work", escalate=True, escalation_cause="quality", escalation_note="Fixture verification identified incorrect results")
     assert second["task_name"] != first["task_name"]
     assert (
         first["model"] == "gpt-6-sol" and second["model"] == "gpt-6-astra"
@@ -612,7 +612,7 @@ def test_retry_escalates_model_once_and_gets_unique_task_name(managed):
         flow, task_id="work", agent_id="b", status="unsupported", transcript_path=path
     )
     with pytest.raises(ValueError, match="Retry budget"):
-        planning.prepare_spawn(flow, "work", escalate=True)
+        planning.prepare_spawn(flow, "work", escalate=True, escalation_cause="quality", escalation_note="Fixture verification identified incorrect results")
 
 
 def test_close_agent_receipt_binds_original_parent_and_child(managed):
@@ -757,7 +757,7 @@ def test_explicit_profile_does_not_escalate_after_interruption(managed):
     w.record_close(flow, task_id="work", agent_id="first", status="unsupported", transcript_path=path)
     before = copy.deepcopy(flow)
     with pytest.raises(ValueError, match="Explicit model profile is fixed"):
-        planning.prepare_spawn(flow, "work", escalate=True)
+        planning.prepare_spawn(flow, "work", escalate=True, escalation_cause="quality", escalation_note="Fixture verification identified incorrect results")
     assert flow == before
     assert task["modelProfileOverride"] == "balanced"
 
@@ -772,7 +772,7 @@ def test_failed_escalation_preparation_is_atomic(managed):
     Path(task["taskFile"]).write_text("changed task")
     before = copy.deepcopy(flow)
     with pytest.raises(ValueError, match="Registered TaskFile changed"):
-        planning.prepare_spawn(flow, "work", escalate=True)
+        planning.prepare_spawn(flow, "work", escalate=True, escalation_cause="quality", escalation_note="Fixture verification identified incorrect results")
     assert flow == before
     assert task["requestedModel"] == "gpt-6-sol"
 
@@ -785,7 +785,7 @@ def test_each_attempt_retains_its_model_effort_and_route_evidence(managed):
     path, report = transcript(managed, "work", "first", status="FAIL")
     first_run = w.record_run(flow, task_id="work", agent_id="first", report=report, transcript_path=path)
     w.record_close(flow, task_id="work", agent_id="first", status="unsupported", transcript_path=path)
-    second = planning.prepare_spawn(flow, "work", escalate=True)
+    second = planning.prepare_spawn(flow, "work", escalate=True, escalation_cause="quality", escalation_note="Fixture verification identified incorrect results")
     second_spawn = w.record_spawn(flow, task_id="work", agent_id="second", actual_model=second["model"])
     assert (first["model"], first["reasoning_effort"]) == ("gpt-6-luna", "low")
     assert (second["model"], second["reasoning_effort"]) == ("gpt-6-sol", "medium")
@@ -877,7 +877,7 @@ def test_no_available_escalation_keeps_original_attempt_and_route(managed, at_fr
         del flow["policy"]["host"]["models"]["gpt-6-astra"]
     before = copy.deepcopy(flow)
     with pytest.raises(ValueError, match="return to main"):
-        planning.prepare_spawn(flow, "work", escalate=True)
+        planning.prepare_spawn(flow, "work", escalate=True, escalation_cause="quality", escalation_note="Fixture verification identified incorrect results")
     assert flow == before
     assert planning.ready_tasks(flow)["ready"] == []
     assert planning.ready_tasks(flow)["requiresEscalation"] == []

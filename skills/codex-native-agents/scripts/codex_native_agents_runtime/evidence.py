@@ -306,9 +306,14 @@ def runs_snapshot(workflow: dict) -> dict:
     return {tid: task["latestRunId"] for tid, task in workflow["tasks"].items()}
 
 
-def run_checks(workflow: dict, checks_file: Path) -> dict:
+def run_checks(
+    workflow: dict, checks_file: Path, *, expected_source: dict | None = None,
+    check_lock_fd: int | None = None,
+) -> dict:
     policy = workflow["policy"]
     before = snapshot(policy["projectRoot"], policy["artifactRoot"])
+    if expected_source is not None and before != expected_source:
+        raise ContractError("Check source changed before execution; rerun current checks")
     checks = json.loads(checks_file.read_text()).get("checks")
     if not isinstance(checks, list) or not checks:
         raise ContractError("Checks must contain explicit argv commands")
@@ -337,16 +342,24 @@ def run_checks(workflow: dict, checks_file: Path) -> dict:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             start_new_session=os.name != "nt",
+            # Keep the execution lock alive if the CLI is SIGKILLed. Commands
+            # must stay in the foreground and preserve inherited descriptors.
+            pass_fds=(check_lock_fd,) if os.name != "nt" and check_lock_fd is not None else (),
         )
         try:
             output, _ = child.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except BaseException as error:
             if os.name != "nt":
-                os.killpg(child.pid, signal.SIGKILL)
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             else:
                 child.kill()
             child.communicate()
-            raise ContractError("Verification command timed out")
+            if isinstance(error, subprocess.TimeoutExpired):
+                raise ContractError("Verification command timed out") from error
+            raise
         if child.returncode:
             raise ContractError(
                 f"Verification failed ({child.returncode}): {argv}\n"

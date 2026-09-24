@@ -55,6 +55,8 @@ is planning advice; it neither discovers mode nor grants permission.
   they may read/write. Multiple readers may share scope. A writer conflicts
   with readers and writers in its scope. Serialize shared indexes, lockfiles,
   generated catalogs and integration changes under one owner.
+  Ordered writers may share scope only with an explicit direct or transitive
+  dependency; the later task still waits for successful terminal settlement.
 - Default to standard acceptance: main reviews the actual diff and executes
   relevant checks. Choose strict before dispatch for high-risk changes or
   explicitly requested independent reviews. Do not downgrade a running workflow.
@@ -69,6 +71,9 @@ is planning advice; it neither discovers mode nor grants permission.
   Luna to Sol, Sol to Astra. Prepare a fresh attempt after terminal settlement.
   After the second attempt, or at the top profile, return to main. Resolve missing
   context, unavailable tools or permissions before considering a stronger model.
+  `NEEDS_CONTEXT` and `BLOCKED` cannot escalate. Other retry candidates require
+  `--escalation-cause capability|quality` and an evidence-based `--escalation-note`;
+  a failed or interrupted run alone does not establish a model capability problem.
 
 Keep the user's main-session model unchanged. Dispatch coherent assignments with
 the minimum sufficient context and concise result cards; do not fill every slot

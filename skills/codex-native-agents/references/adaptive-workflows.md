@@ -105,6 +105,11 @@ Omit --depends-on when independent and --parallel when serial. Dependencies must
 already be registered. Omit --model-profile for automatic selection; a supplied
 profile is pinned and must meet the task's risk requirements. Scope includes relevant reads as well as writes; broad scopes
 trade parallelism for safety. Reviewers/final-verifiers must be read-only.
+Overlapping writers may both use --parallel if the later task has a direct or
+transitive dependency on the earlier writer. They execute sequentially after
+successful terminal settlement while remaining eligible to overlap unrelated
+work. A common ancestor is not an ordering between sibling writers. Readers
+still cannot overlap an active writer, and main-reserved scopes remain blocked.
 
 Call the actual native spawn tool using the emitted payload. Do not reconstruct
 its fork/model/effort fields. Immediately register the returned ID:
@@ -121,6 +126,9 @@ slots and useful independent work. Do not start a child solely to occupy a slot.
 `requiresEscalation`; both share the same scope and slot reservations. Review the
 failure cause before preparing a retry with `--escalate`. `blocked` explains pins,
 exhausted routes, dependencies or capacity. A second ordinary preparation is rejected.
+`ready` reads an atomically replaced state file without waiting for the workflow
+lock. Its suggestions reserve nothing; prepare-spawn and record-spawn recheck the
+current state under the lock before admission.
 
 A failed or interrupted first automatic attempt may use prepare-spawn --escalate:
 economy moves to balanced, balanced/balancedHigh move to frontier. Capability
@@ -128,6 +136,22 @@ selection can skip unsupported intermediate profiles upward. Frontier has no
 higher route. A pin requires explicit replanning instead of escalation. A second
 failure returns to main for diagnosis/replanning. Missing inputs require
 clarification, not more effort. Preserve each attempt's original model/effort/reason.
+`NEEDS_CONTEXT` and `BLOCKED` are excluded from escalation by the runtime. Resolve
+the blocker in main; if task inputs/scope must change, register a fresh corrected
+task/workflow and preserve the original failed records. Do not edit a pinned
+TaskFile or clear a failed status to force acceptance. For other failures or a
+verified interruption, main must explain why a stronger model addresses the
+observed problem:
+
+```sh
+python3 skills/codex-native-agents/scripts/native_agents.py prepare-spawn --workflow-id <id> --task-id <task> --escalate --escalation-cause quality --escalation-note "Original report failed the required boundary cases; inputs and tools were available."
+```
+
+Use capability or quality as the cause, with supporting observations. The runtime
+records the diagnosis and previous run/agent; it cannot determine whether the
+explanation is true. A FAIL status or interruption is not itself sufficient proof
+of inadequate model capability. A completed attempt without its verified report
+cannot bypass the status check by recording only terminal settlement.
 If a spawn fails or its outcome is uncertain, preserve the prepared record and
 resolve the actual host state before retrying. Never clear a reservation to hide
 an unrecorded child. An unresolved preparation blocks acceptance.
@@ -171,6 +195,26 @@ Main review explains scope compliance, correctness and remaining risks; check
 sufficiency still requires judgement. A failed check invalidates earlier evidence.
 Source/run changes require new checks/review. No independent reviewers are required
 for standard; add them when useful rather than mechanically for every small edit.
+
+`run-checks` uses short workflow locks to invalidate old results, pin state and
+commit current results. Test commands run outside that lock, so queries and other
+workflow operations can proceed. A separate check lock permits only one check
+execution per workflow; a concurrent second request fails promptly without
+changing the first one's evidence. Wait for the active check or resolve its state
+before retrying; do not delete lock files.
+
+Source/workflow changes during checks cause rejection at commit, including new
+tasks, reservations, runs or policy changes. Pending/unresolved checks block main
+review and both acceptance profiles. Failed/cancelled runs persist a failure
+record, so an earlier strict final verification cannot override a failed extra
+check. A full fresh successful check run clears that blocker. SIGTERM and normal
+exceptions clean up the owned check process and partial evidence. On POSIX, the
+check command inherits the execution lock: a surviving command retaining that
+descriptor blocks recovery after the CLI is SIGKILLed. The unresolved marker
+also blocks acceptance until fresh checks succeed. Use foreground commands that
+preserve inherited descriptors; detached descendants, descriptor-closing tools
+and Windows need confirmation that old processes have stopped before recovery.
+Do not delete lock files or manually clear failure/pending records.
 
 ## Strict acceptance
 

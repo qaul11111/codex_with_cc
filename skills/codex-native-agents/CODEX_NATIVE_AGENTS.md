@@ -31,6 +31,8 @@ take precedence. Short or coupled tasks stay in main without workflow overhead.
 - Automatic failed attempts may escalate once along the explicit profile chain.
   A pinned profile needs explicit replanning; missing inputs or permissions need
   resolution, not escalation. Preserve each attempt's original route and reason.
+  NEEDS_CONTEXT/BLOCKED are ineligible. Other retries require a recorded capability
+  or quality diagnosis with evidence, bound to the previous run/agent.
 - With close_agent, keep original successful close tool evidence. Without it,
   original terminal events prove execution stopped, and closure is unsupported.
   interrupt_agent is never proof of host closure.
@@ -40,6 +42,13 @@ take precedence. Short or coupled tasks stay in main without workflow overhead.
   a final worker uses verify-final-inputs.
 - Empty workflows, pending tasks, stale source, changed evidence and unfinished
   attempts cannot be accepted. Accepted workflows remain immutable.
+- Only ordered writers with declared dependencies can share registered scope;
+  active read/write conflicts still block dispatch. Ready queries read atomic
+  state without a lock, but dispatch mutations recheck admission under lock.
+- Slow checks run outside the workflow state lock. A separate per-workflow check
+  lock prevents overlapping test commands. Results commit only against the same
+  generation, workflow state and source. Pending or unresolved checks prevent
+  review/acceptance, and failed checks cannot preserve previous success.
 
 ## Boundaries
 

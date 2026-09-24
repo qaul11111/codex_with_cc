@@ -10,7 +10,11 @@ Use the actual host tool catalog and preserve the emitted payload. Only main
 spawns agents. Spawn the ready wave before waiting; process whichever finishes
 first, then recompute readiness. Main continues only in non-conflicting scope.
 The `ready` result lists eligible retries separately as `requiresEscalation`;
-inspect the failure and use `prepare-spawn --escalate` for an appropriate retry.
+inspect the failure and use `prepare-spawn --escalate --escalation-cause capability|quality
+--escalation-note <observed evidence>` for an appropriate retry. `NEEDS_CONTEXT`
+and `BLOCKED` return to main for resolution/replanning, never automatic escalation.
+The ready view is advisory and can become stale; prepare and record-spawn recheck
+dependencies, scopes and slots under the workflow lock.
 
 Command sequence (all support the same --artifact-root where applicable):
 
