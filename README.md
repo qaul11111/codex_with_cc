@@ -17,7 +17,11 @@ explicitly requests delegation where host mode permits skill requests, while
 preserving hard prohibitions and user limits. Per-prompt reminders also cover
 ordinary development requests; they are instructions, not a guaranteed scheduler.
 Routing balances GPT-6 Luna for focused work,
-GPT-6 Sol for implementation and analysis, and GPT-6 Astra for difficult judgement.
+GPT-6.1 Sol for ordinary and complex verifiable implementation/analysis, and
+GPT-6 Astra for high-risk judgement, diagnosed escalation and strict final verification.
+Risk is independent of complexity (`--risk high`); ordinary completion keeps
+standard checks and main review. Legacy GPT-6 Sol profiles remain fixed for
+pending tasks and explicit pins.
 The active host's exact model IDs and reasoning efforts constrain every route.
 Unavailable automatic routes may select a stronger supported profile; explicit
 profile choices stay pinned. No GPT-5.6 alias substitution is allowed.

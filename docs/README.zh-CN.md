@@ -33,16 +33,25 @@ native-only 的目标是由主程自行选择更合适的执行方式，而不�
 | 档位 | 模型 / 思考强度 | 适用工作 |
 | --- | --- | --- |
 | economy | gpt-6-luna / low | 聚焦、边界明确的轻量工作 |
-| balanced | gpt-6-sol / medium | 常规开发与分析 |
-| balancedHigh | gpt-6-sol / high | 需要深入推理的开发与审查 |
-| frontier | gpt-6-astra / xhigh | 复杂判断、高风险任务、最终验证 |
+| balanced61 | gpt-6.1-sol / medium | 常规开发与分析 |
+| balancedHigh61 | gpt-6.1-sol / high | 深入实现、调查与常规审查 |
+| deliberate61 | gpt-6.1-sol / xhigh | 复杂规划与审查 |
+| frontier | gpt-6-astra / xhigh | 高风险判断、失败升级、strict 最终验证 |
 
-主程判断角色和复杂度，运行时自动选择可用档位，并保存首选、实际选择和原因。
+旧 `balanced` / `balancedHigh` 仍分别对应 GPT-6 Sol medium / high，只用于已有记录
+和明确固定的选择；新任务不会自动回落到旧 Sol，更不会重写旧任务的模型证据。
+
+复杂度与风险独立：`--risk high` 必须使用 strict + Astra，适用于安全/隐私边界、
+不可逆数据变更、资金决策等后果严重或难以验证的工作。复杂但可测试、后果普通的
+任务可以使用 6.1 Sol high / xhigh。旧 `--complexity high-risk` 始终按高风险处理，
+不能用 `--risk normal` 降低要求。
+
+主程判断角色、复杂度和风险，运行时自动选择可用档位，并保存首选、实际选择和原因。
 默认路由不可用时只向更强的受支持档位寻找；没有合适档位则回主程。
 `--model-profile` 是明确固定档位，不因不可用或失败而偷偷改模型。
 宿主必须公布精确 model ID 和思考强度，不能把 GPT-5.6 Sol/Luna 当成 GPT-6。
 
-自动任务首次失败后可升级一次：Luna → Sol，Sol → Astra；Astra 已到顶，
+自动任务首次失败后可升级一次：Luna → 6.1 Sol，任意 6.1 Sol 档位直接 → Astra；Astra 已到顶，
 无更高档位则回主程。升级重新准备并保留之前的执行证据，每个任务最多两次尝试。
 缺失输入、权限和工具故障先解决原因，不靠更贵模型重复尝试。
 运行时禁止 `NEEDS_CONTEXT`、`BLOCKED` 直接升级。其他重试必须记录能力/质量原因及
@@ -57,7 +66,8 @@ native-only 的目标是由主程自行选择更合适的执行方式，而不�
 选择模型，不会自行切换正在运行的主会话。工作流是主程调用原生工具完成的，
 不是后台独立调度服务，也不按三个模型平均分配任务。
 
-普通开发默认 standard：主程审查实际差异，执行相关检查并验证源码仍然对应结果。
+普通开发默认 standard：主程审查实际差异，执行相关检查并验证源码仍然对应结果，
+不额外启动 Astra final-verifier。检查与证据标准不会因 Sol 承担更多工作而降低。
 高风险或用户明确要求独立审查时选择 strict：需求审查、质量审查、最终验证依次建立
 准确的运行绑定。审查和最终快照在派工前固定，晚到的旧报告不能验收新实现。
 
@@ -72,8 +82,10 @@ closeStatus=unsupported。中断不等于关闭。登记结果会核对实际模
 性能收益需要真实相近任务对比：关注总耗时、结果质量、返工和所有层的 token 用量。
 本地离线测试只能证明调度/证据规则，不能证明模型效果或生产性能。
 
-截至 2026-09-23，[官方模型目录](https://developers.openai.com/api/docs/models)
-列出的每百万 token 标准输入/输出价为 Astra $10/$50、Sol $2/$10、Luna $0.1/$0.5。
+截至 2026-09-30，[GPT-6.1 Sol 官方说明](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+列出的每百万 token 标准输入/缓存输入/输出价为 $2/$0.10/$10；Astra 为 $10/$1/$50。
+这是公开 API 定价，不能直接换算订阅额度或中转扣费。公开 API 上下文也不是订阅
+上下文承诺；本地订阅目录保持 272000 × 95% = 258400 的有效预算。
 这些单价不是整项任务费用；重试、上下文传递、缓存、服务档位和中转渠道计费都会影响结果。
 [官方子代理说明](https://learn.chatgpt.com/docs/agent-configuration/subagents)
 支持按子任务指定模型与思考强度，实际可用性仍以当前会话工具目录为准。

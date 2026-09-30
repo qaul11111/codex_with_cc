@@ -103,10 +103,12 @@ def _route(
     *,
     capabilities: dict | None = None,
     model_profile: str | None = None,
+    risk: str = "normal",
 ) -> Any:
     try:
         return route_for_task(
-            role, complexity, capabilities=capabilities, model_profile=model_profile
+            role, complexity, capabilities=capabilities, model_profile=model_profile,
+            risk=risk,
         )
     except KeyError as error:
         raise WorkflowError(f"Unsupported worker role: {role}") from error
@@ -174,6 +176,7 @@ def register_task(
     task_file: Path | None = None,
     model_profile: str | None = None,
     complexity: str = "normal",
+    risk: str = "normal",
     review_for_task_id: str | None = None,
     review_kind: str | None = None,
     depends_on: Iterable[str] = (),
@@ -207,7 +210,7 @@ def register_task(
         raise WorkflowError("Reviewers and final verifiers must be read-only")
     if (
         workflow.get("policy")
-        and complexity == "high-risk"
+        and (risk == "high" or complexity == "high-risk")
         and workflow["policy"]["profile"] != "strict"
     ):
         raise WorkflowError("High-risk tasks require a strict workflow")
@@ -217,6 +220,7 @@ def register_task(
         complexity,
         capabilities=policy["host"]["models"] if policy else None,
         model_profile=model_profile,
+        risk=risk,
     )
     if route.model is None:
         raise WorkflowError("No native route; return to main. " + route.reason)
@@ -276,6 +280,7 @@ def register_task(
         "prepared": None,
         "taskSections": sections,
         "complexity": complexity,
+        "risk": "high" if complexity == "high-risk" else risk,
         "preferredModelProfile": route.preferred_profile or route.profile,
         "modelProfileOverride": model_profile,
         "routingReason": route.reason,

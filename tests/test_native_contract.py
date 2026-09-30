@@ -59,10 +59,10 @@ def test_native_contract_retains_the_approved_shared_fields(
         "reasoningEffort": "high",
     }
     assert contract["roleProfiles"] == {
-        "planner": "balanced",
-        "implementer": "balanced",
-        "researcher": "balanced",
-        "reviewer": "balancedHigh",
+        "planner": "balanced61",
+        "implementer": "balanced61",
+        "researcher": "balanced61",
+        "reviewer": "balancedHigh61",
         "final-verifier": "frontier",
     }
     assert contract["workerRoles"] == [
@@ -121,7 +121,7 @@ TaskId: auth-token-implementation
 Role: implementer
 TaskFile: .codex/codex_native_agents/tasks/auth-token-implementation.md
 Scope: src/auth,tests/auth
-ModelProfile: balanced
+ModelProfile: balanced61
 Writable: true
 Parallel: false
 DispatcherRole: main

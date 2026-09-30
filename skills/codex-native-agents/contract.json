@@ -33,16 +33,28 @@
       "model": "gpt-6-sol",
       "reasoningEffort": "high"
     },
+    "balanced61": {
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "medium"
+    },
+    "balancedHigh61": {
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "high"
+    },
+    "deliberate61": {
+      "model": "gpt-6.1-sol",
+      "reasoningEffort": "xhigh"
+    },
     "frontier": {
       "model": "gpt-6-astra",
       "reasoningEffort": "xhigh"
     }
   },
   "roleProfiles": {
-    "planner": "balanced",
-    "implementer": "balanced",
-    "researcher": "balanced",
-    "reviewer": "balancedHigh",
+    "planner": "balanced61",
+    "implementer": "balanced61",
+    "researcher": "balanced61",
+    "reviewer": "balancedHigh61",
     "final-verifier": "frontier"
   },
   "workerRoles": [

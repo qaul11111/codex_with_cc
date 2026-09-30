@@ -374,7 +374,7 @@ def test_record_spawn_updates_actual_model_and_inheritance_fallback() -> None:
     assert first["closure"]["runId"] is None
     assert fallback["executionMode"] == "inherit_parent"
     assert fallback["fallbackReason"] == "requested model unavailable in this host"
-    assert task["requestedModel"] == "gpt-6-sol"
+    assert task["requestedModel"] == "gpt-6.1-sol"
     assert task["latestSpawn"] == fallback
 
 

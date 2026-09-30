@@ -240,6 +240,9 @@ def test_implicit_model_inheritance_is_rejected(run_hook, compliant_spawn) -> No
         ("balanced", "gpt-6-sol", "medium"),
         ("balancedHigh", "gpt-6-sol", "high"),
         ("frontier", "gpt-6-astra", "xhigh"),
+        ("balanced61", "gpt-6.1-sol", "medium"),
+        ("balancedHigh61", "gpt-6.1-sol", "high"),
+        ("deliberate61", "gpt-6.1-sol", "xhigh"),
     ],
 )
 def test_profile_dispatch_preserves_exact_model_and_effort(
@@ -252,7 +255,7 @@ def test_profile_dispatch_preserves_exact_model_and_effort(
     payload["reasoning_effort"] = "max"
     assert "prepared profile" in denied(run_hook(compliant_spawn))
     payload["reasoning_effort"] = effort
-    payload["model"] = model.replace("gpt-6-", "gpt-5.6-")
+    payload["model"] = "wrong-" + model
     assert "prepared profile" in denied(run_hook(compliant_spawn))
 
 

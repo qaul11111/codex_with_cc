@@ -1,7 +1,7 @@
 interface:
   display_name: "Codex Native Agents"
-  short_description: "Balance native GPT-6 Astra, Sol and Luna agents"
-  default_prompt: "Use $codex-native-agents to complete this task, choosing direct work or native GPT-6 Astra, Sol and Luna workers by complexity, risk and actual host support."
+  short_description: "Route native 6.1 Sol, Astra and Luna agents"
+  default_prompt: "Use $codex-native-agents to complete this task, choosing direct work or native GPT-6.1 Sol, GPT-6 Astra and Luna workers by complexity, risk and actual host support."
 
 policy:
   allow_implicit_invocation: true

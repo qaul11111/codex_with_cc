@@ -31,7 +31,7 @@ is a schema example, not evidence of the current host. maxAgents means available
 child slots, excluding main. Use the exact host fork parameter, model IDs and efforts.
 
 ```json
-{"source":"active-tool-catalog","tools":["spawn_agent","list_agents","wait_agent"],"forkParameter":"fork_turns","models":{"gpt-6-luna":["low","medium","high"],"gpt-6-sol":["low","medium","high","xhigh"],"gpt-6-astra":["low","medium","high","xhigh"]},"maxAgents":3}
+{"source":"active-tool-catalog","tools":["spawn_agent","list_agents","wait_agent"],"forkParameter":"fork_turns","models":{"gpt-6-luna":["low","medium","high"],"gpt-6.1-sol":["low","medium","high","xhigh","max"],"gpt-6-astra":["low","medium","high","xhigh"]},"maxAgents":3}
 ```
 
 ```sh
@@ -53,23 +53,31 @@ Preview a route without creating workflow artifacts or starting a model:
 python3 skills/codex-native-agents/scripts/native_agents.py route --role implementer --complexity normal --host-capabilities <caps.json>
 ```
 
-The four profiles are economy (Luna low), balanced (Sol medium), balancedHigh
-(Sol high), and frontier (Astra xhigh). Role and complexity choose a preferred
-profile. Automatic selection tries that profile, then stronger supported profiles;
+The active profiles are economy (Luna low), balanced61 (6.1 Sol medium),
+balancedHigh61 (6.1 Sol high), deliberate61 (6.1 Sol xhigh), and frontier
+(Astra xhigh). Legacy balanced/balancedHigh retain GPT-6 Sol medium/high for
+existing records and explicit pins; new automatic routes do not fall back to
+old Sol. Role, complexity and risk choose a preferred profile. Automatic selection tries that profile, then stronger supported profiles;
 the result includes the preferred profile, actual route and reason. Never choose
 a lower profile to bypass missing capability. If nothing qualifies, return to main.
 Registration rejects an unavailable route before creating a pending task, so other
 tasks can still finish. Respect user model restrictions when choosing any main-thread
 follow-up; a fallback is not permission to run restricted work on a different model.
 
-`--complexity` accepts simple, normal (default), complex and high-risk:
+`--complexity` accepts simple, normal (default), complex and legacy high-risk.
+`--risk normal|high` is independent of complexity. High risk always requires a
+strict workflow and frontier; legacy complexity high-risk has the same effect
+even with `--risk normal`. Use high risk for consequential security/privacy,
+irreversible data changes, financial decisions or similarly uncertain impact.
+Complex but testable work with ordinary impact may stay standard and use Sol.
+This matrix shows normal risk except the high-risk column:
 
 | Role | simple | normal | complex | high-risk |
 | --- | --- | --- | --- | --- |
-| researcher | economy | balanced | balancedHigh | frontier |
-| implementer | balanced | balanced | balancedHigh | frontier |
-| planner | balanced | balanced | frontier | frontier |
-| reviewer | balanced | balancedHigh | frontier | frontier |
+| researcher | economy | balanced61 | balancedHigh61 | frontier |
+| implementer | balanced61 | balanced61 | balancedHigh61 | frontier |
+| planner | balanced61 | balanced61 | deliberate61 | frontier |
+| reviewer | balanced61 | balancedHigh61 | deliberate61 | frontier |
 | final-verifier | frontier | frontier | frontier | frontier |
 
 A focused independent log scan can use `--role researcher --complexity simple`
@@ -131,7 +139,10 @@ lock. Its suggestions reserve nothing; prepare-spawn and record-spawn recheck th
 current state under the lock before admission.
 
 A failed or interrupted first automatic attempt may use prepare-spawn --escalate:
-economy moves to balanced, balanced/balancedHigh move to frontier. Capability
+economy moves to balanced61; balanced61/balancedHigh61/deliberate61 move
+directly to frontier. Legacy balanced/balancedHigh also move to frontier.
+There is no medium-to-high-to-xhigh retry ladder: every task still has at most
+two attempts. Capability
 selection can skip unsupported intermediate profiles upward. Frontier has no
 higher route. A pin requires explicit replanning instead of escalation. A second
 failure returns to main for diagnosis/replanning. Missing inputs require

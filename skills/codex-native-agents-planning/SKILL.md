@@ -16,7 +16,11 @@ or constraints change. Small direct tasks need no workflow.
 
 For a useful split, choose standard or strict before initialization. Map dependencies,
 read/write access and main-owned integration files. Register producers first.
-Choose role/complexity for the Luna/Sol/Astra route and inspect actual host support.
+Choose role/complexity/risk for the Luna/6.1 Sol/Astra route and inspect actual
+host support. Complex ordinary work can use 6.1 Sol high/xhigh; `--risk high`
+requires Astra and strict acceptance, independently of complexity. Legacy
+`--complexity high-risk` remains high risk. Standard completion uses checks and
+main review without adding a final-verifier worker.
 Use an explicit profile only to honor a deliberate model choice. Estimate dispatch/review
 cost and stop splitting when it exceeds expected saved time. The `advise` command
 can record this reasoning without creating a workflow.

@@ -11,8 +11,8 @@ take precedence. Short or coupled tasks stay in main without workflow overhead.
 
 ## Invariants
 
-- Native GPT-6 Astra, Sol and Luna; contract.json selects model and effort by
-  role/complexity, then filters using the active host's exact capabilities.
+- Native GPT-6.1 Sol, GPT-6 Astra and Luna; contract.json selects model and effort by
+  role/complexity/risk, then filters using the active host's exact capabilities.
   Automatic routes can move to stronger supported profiles and record why.
   Explicit profile choices remain pinned. If no route is supported, return to
   main. Never substitute GPT-5.6 IDs or silently inherit the parent's model.

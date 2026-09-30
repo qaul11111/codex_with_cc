@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     advise.add_argument("--independent", action="store_true")
     advise.add_argument("--coupled", action="store_true")
+    advise.add_argument("--risk", choices=("normal", "high"), default="normal")
     advise.add_argument("--estimated-minutes", type=float, required=True)
     advise.add_argument("--overhead-minutes", type=float, default=2)
     advise.add_argument("--multi-agent-mode", choices=("enabled", "explicit-only", "disabled", "unknown"), default="unknown")
@@ -66,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     route.add_argument("--role", required=True)
     route.add_argument("--complexity", default="normal")
+    route.add_argument("--risk", choices=("normal", "high"), default="normal")
     route.add_argument("--host-capabilities", type=Path, required=True)
     route.add_argument(
         "--model-profile", help="Explicit fixed profile; unavailable profiles return to main"
@@ -110,6 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="User-selected fixed profile; no automatic replacement or escalation",
     )
     register.add_argument("--complexity", default="normal")
+    register.add_argument("--risk", choices=("normal", "high"), default="normal")
     register.add_argument("--review-for-task-id")
     register.add_argument("--review-kind")
     register.add_argument("--depends-on", action="append", default=[])
@@ -160,6 +163,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.complexity,
                 capabilities=host["models"],
                 model_profile=args.model_profile,
+                risk=args.risk,
             )
             print(json.dumps(asdict(route), indent=2))
             return 0
@@ -168,6 +172,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 json.dumps(
                     planning.advise(
                         complexity=args.complexity,
+                        high_risk=args.risk == "high",
                         independent=args.independent,
                         coupled=args.coupled,
                         estimated_minutes=args.estimated_minutes,
@@ -289,6 +294,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         task_file=args.task_file,
                         model_profile=args.model_profile,
                         complexity=args.complexity,
+                        risk=args.risk,
                         review_for_task_id=args.review_for_task_id,
                         review_kind=args.review_kind,
                         depends_on=args.depends_on,

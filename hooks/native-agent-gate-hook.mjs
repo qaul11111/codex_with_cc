@@ -95,7 +95,7 @@ const CONTEXT = [
   "- Dispatch only spawn_agent calls with fork_turns: none (or legacy fork_context: false) and a full [NATIVE_CODEX_AGENT_TASK] envelope.",
   "- The envelope must name WorkflowId, TaskId, Role, TaskFile, Scope, ModelProfile, Writable, Parallel, and DispatcherRole: main.",
   "- Workers must not call spawn_agent or dispatch nested workers; return the structured report to the main thread.",
-  "- Use the prepared Luna/Sol/Astra model and effort supported by this host. Preserve explicit pins; no GPT-5.6 aliases. If unavailable, return control to main.",
+  "- Use the prepared Luna/6.1 Sol/Astra model and effort supported by this host. Preserve explicit pins; no GPT-5.6 aliases. If unavailable, return control to main.",
 ].join("\n");
 
 const ASSESSMENT_REMINDER = [

@@ -19,13 +19,20 @@ class ModelRoute:
 # This order expresses routing policy; JSON object order has no routing meaning.
 # Only exact configured model IDs and advertised reasoning efforts are eligible.
 _AUTOMATIC_CANDIDATES = {
-    "economy": ("economy", "balanced", "balancedHigh", "frontier"),
+    "economy": ("economy", "balanced61", "balancedHigh61", "deliberate61", "frontier"),
+    "balanced61": ("balanced61", "balancedHigh61", "deliberate61", "frontier"),
+    "balancedHigh61": ("balancedHigh61", "deliberate61", "frontier"),
+    "deliberate61": ("deliberate61", "frontier"),
+    # Preserve registered pre-6.1 routes and explicit legacy pins.
     "balanced": ("balanced", "balancedHigh", "frontier"),
     "balancedHigh": ("balancedHigh", "frontier"),
     "frontier": ("frontier",),
 }
 _ESCALATION_CANDIDATES = {
-    "economy": ("balanced", "balancedHigh", "frontier"),
+    "economy": ("balanced61", "balancedHigh61", "deliberate61", "frontier"),
+    "balanced61": ("frontier",),
+    "balancedHigh61": ("frontier",),
+    "deliberate61": ("frontier",),
     "balanced": ("frontier",),
     "balancedHigh": ("frontier",),
     "frontier": (),
@@ -82,9 +89,13 @@ def route_for_task(
     *,
     capabilities: dict[str, list[str]] | None = None,
     model_profile: str | None = None,
+    risk: str = "normal",
 ) -> ModelRoute:
     if complexity not in {"simple", "normal", "complex", "high-risk"}:
         raise ContractError("Unsupported complexity")
+    if risk not in {"normal", "high"}:
+        raise ContractError("Unsupported risk")
+    high_risk = risk == "high" or complexity == "high-risk"
     contract = load_contract()
     if role not in contract["roleProfiles"]:
         raise ContractError(f"Unsupported worker role: {role}")
@@ -92,19 +103,19 @@ def route_for_task(
     if role == "researcher" and complexity == "simple":
         profile = "economy"
     if role == "reviewer" and complexity == "simple":
-        profile = "balanced"
+        profile = "balanced61"
     if role in {"implementer", "researcher"} and complexity == "complex":
-        profile = "balancedHigh"
+        profile = "balancedHigh61"
     if role in {"planner", "reviewer"} and complexity == "complex":
+        profile = "deliberate61"
+    if role == "final-verifier" or high_risk:
         profile = "frontier"
-    if role == "final-verifier" or complexity == "high-risk":
-        profile = "frontier"
-    reason = f"{role}/{complexity} prefers {profile}"
+    reason = f"{role}/{complexity} risk={'high' if high_risk else 'normal'} prefers {profile}"
     if model_profile is not None:
         if model_profile not in _AUTOMATIC_CANDIDATES:
             raise ContractError(f"Unsupported model profile: {model_profile}")
         if (
-            role == "final-verifier" or complexity == "high-risk"
+            role == "final-verifier" or high_risk
         ) and model_profile != "frontier":
             raise ContractError(
                 "High-risk tasks and final verification require frontier; "

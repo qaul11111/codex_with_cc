@@ -1,6 +1,6 @@
 ---
 name: codex-native-agents
-description: Assess decomposition before substantial development or investigation, then dispatch eligible native GPT-6 Astra, Sol and Luna subagents or explain direct execution. Cooperate with the task's multi-agent mode, user limits and actual host support.
+description: Assess decomposition before substantial development or investigation, then dispatch eligible native GPT-6.1 Sol, GPT-6 Astra and Luna subagents or explain direct execution. Cooperate with the task's multi-agent mode, user limits and actual host support.
 ---
 
 # Codex Native Agents
@@ -60,20 +60,31 @@ is planning advice; it neither discovers mode nor grants permission.
 - Default to standard acceptance: main reviews the actual diff and executes
   relevant checks. Choose strict before dispatch for high-risk changes or
   explicitly requested independent reviews. Do not downgrade a running workflow.
-- Use Luna low for focused work, Sol medium for ordinary work, Sol high for
-  deeper implementation/review, and Astra xhigh for difficult judgement,
-  high-risk work and final verification. Main chooses role/complexity; runtime
+- Use Luna low for focused work, 6.1 Sol medium for ordinary work, 6.1 Sol high
+  for deeper implementation/review, and 6.1 Sol xhigh for complex planning/review.
+  Use Astra xhigh for high-risk work, strict final verification and escalation
+  after a diagnosed Sol capability/quality failure. Classify risk separately:
+  complexity alone does not require Astra or strict acceptance. Use `--risk high`
+  for security/privacy boundaries, irreversible data changes, financial decisions
+  or similarly consequential uncertainty; legacy `--complexity high-risk` also
+  remains high risk and cannot be downgraded with `--risk normal`. Main chooses
+  role/complexity/risk; runtime
   checks the exact model/effort against the active host catalog and records the
   selection reason. An unavailable automatic route can move to a stronger
   supported profile; if none exists, keep work in main. Never alias GPT-5.6 to 6.
 - Preserve an explicitly chosen profile with `--model-profile`; it cannot be
   silently replaced or escalated. Automatic failed attempts may escalate once:
-  Luna to Sol, Sol to Astra. Prepare a fresh attempt after terminal settlement.
+  Luna to 6.1 Sol, any 6.1 Sol profile directly to Astra. Prepare a fresh attempt after terminal settlement.
   After the second attempt, or at the top profile, return to main. Resolve missing
   context, unavailable tools or permissions before considering a stronger model.
   `NEEDS_CONTEXT` and `BLOCKED` cannot escalate. Other retry candidates require
   `--escalation-cause capability|quality` and an evidence-based `--escalation-note`;
   a failed or interrupted run alone does not establish a model capability problem.
+
+New automatic routes use 6.1 Sol profiles; `balanced`/`balancedHigh` retain their
+original GPT-6 Sol pairs only for existing tasks and explicit pins. Do not rename
+old receipts or treat GPT-6 Sol as an alias for GPT-6.1 Sol. Standard acceptance
+uses current checks and main review, without a redundant final-verifier worker.
 
 Keep the user's main-session model unchanged. Dispatch coherent assignments with
 the minimum sufficient context and concise result cards; do not fill every slot
@@ -97,7 +108,7 @@ TaskId: auth-token-implementation
 Role: implementer
 TaskFile: .codex/codex_native_agents/tasks/auth-token-implementation.md
 Scope: src/auth,tests/auth
-ModelProfile: balanced
+ModelProfile: balanced61
 Writable: true
 Parallel: false
 DispatcherRole: main
