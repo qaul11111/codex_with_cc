@@ -36,10 +36,9 @@ def validate_capabilities(data: dict) -> dict:
     ):
         raise ContractError("Host tools must be a list of non-empty tool names")
     names = {name.replace("__", ".").split(".")[-1] for name in tools}
-    if not {"spawn_agent", "list_agents"}.issubset(names) or not names.intersection(
-        {"wait_agent", "wait"}
-    ):
-        raise ContractError("Host needs native spawn, list and wait tools")
+    # Discovery is optional: workflow state and original transcripts track owned agents.
+    if "spawn_agent" not in names or not names.intersection({"wait_agent", "wait"}):
+        raise ContractError("Host needs native spawn_agent and wait_agent/wait tools")
     if data.get("forkParameter") not in {"fork_turns", "fork_context"}:
         raise ContractError("Host must declare its actual forkParameter")
     models = data.get("models")

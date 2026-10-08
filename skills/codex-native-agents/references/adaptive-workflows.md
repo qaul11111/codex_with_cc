@@ -31,12 +31,22 @@ is a schema example, not evidence of the current host. maxAgents means available
 child slots, excluding main. Use the exact host fork parameter, model IDs and efforts.
 
 ```json
-{"source":"active-tool-catalog","tools":["spawn_agent","list_agents","wait_agent"],"forkParameter":"fork_turns","models":{"gpt-6-luna":["low","medium","high"],"gpt-6.1-sol":["low","medium","high","xhigh","max"],"gpt-6-astra":["low","medium","high","xhigh"]},"maxAgents":3}
+{"source":"active-tool-catalog","tools":["spawn_agent","send_input","resume_agent","wait_agent","close_agent"],"forkParameter":"fork_context","models":{"gpt-6-luna":["low","medium","high"],"gpt-6.1-sol":["low","medium","high","xhigh","max"],"gpt-6-astra":["low","medium","high","xhigh"]},"maxAgents":1}
 ```
 
 ```sh
 python3 skills/codex-native-agents/scripts/native_agents.py init --workflow-id <id> --profile standard --project-root <absolute-project> --artifact-root <absolute-artifacts> --host-capabilities <caps.json> --main-scope <integration-path>
 ```
+
+`spawn_agent` and `wait_agent` (or legacy `wait`) are required. `list_agents` is
+optional discovery, not a dispatch prerequisite. Without it, track only agent IDs
+returned by your own spawns, wait on those IDs, and retain the original transcript
+and actual close receipts. Do not fabricate discovery results or replace native
+agent discovery with a chat-listing API. Workflow concurrency limits cover registered
+workers, not an inventory of other chats; use a conservative available-slot budget
+and treat a host admission rejection as a blocker, never evidence of a user ban.
+If initialization fails, stop: do not run registration or preparation against a
+nonexistent workflow. Correct the reported capability problem or return to main.
 
 Use strict for high risk or requested independent reviews. Policy is fixed at
 initialization. Never edit workflow JSON to bypass admission or acceptance.

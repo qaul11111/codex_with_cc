@@ -1,6 +1,6 @@
 {
   "name": "codex-native-agents",
-  "version": "0.1.0+codex.20260930033849",
+  "version": "0.1.0+codex.20261008070030",
   "description": "Balance native GPT-6.1 Sol, GPT-6 Astra and Luna agents by task complexity, risk and exact host capabilities.",
   "author": {
     "name": "xdd666t"

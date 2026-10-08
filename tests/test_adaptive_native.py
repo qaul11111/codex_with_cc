@@ -989,3 +989,124 @@ def test_pre61_automatic_task_and_receipt_survive_contract_upgrade(managed, monk
     assert main(prefix + ["run-checks", "--workflow-id", "adaptive", "--checks-file", str(checks)]) == 0
     assert main(prefix + ["record-main-review", "--workflow-id", "adaptive", "--review-file", str(review)]) == 0
     assert main(prefix + ["verify", "--workflow-id", "adaptive"]) == 0
+
+
+@pytest.mark.parametrize(
+    "tools,lifecycle",
+    [
+        (["spawn_agent", "wait_agent"], "terminal-evidence"),
+        (["spawn_agent", "wait"], "terminal-evidence"),
+        (["spawn_agent", "list_agents", "wait_agent"], "terminal-evidence"),
+        (
+            [
+                "multi_agent_v1.spawn_agent",
+                "multi_agent_v1.wait_agent",
+                "multi_agent_v1.send_input",
+                "multi_agent_v1.resume_agent",
+                "multi_agent_v1.close_agent",
+            ],
+            "strict-close",
+        ),
+        (
+            ["native__spawn_agent", "native__wait_agent", "native__close_agent"],
+            "strict-close",
+        ),
+    ],
+)
+def test_host_tool_compatibility_listing_is_optional(managed, tools, lifecycle):
+    caps = copy.deepcopy(managed[0]["policy"]["host"])
+    caps["tools"] = tools
+    caps["forkParameter"] = "fork_context"
+    before = copy.deepcopy(caps)
+    validated = evidence.validate_capabilities(caps)
+    assert caps == before
+    assert validated["tools"] == tools
+    assert validated["lifecycle"] == lifecycle
+    assert validated["models"] == caps["models"]
+    assert validated["maxAgents"] == caps["maxAgents"]
+    assert validated["forkParameter"] == "fork_context"
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        [],
+        ["wait_agent"],
+        ["spawn_agent"],
+        ["list_agents"],
+        ["spawn_agent", "list_agents"],
+        ["wait_agent", "list_agents"],
+        ["spawn_agent", "list_threads"],
+    ],
+)
+def test_host_tool_compatibility_still_requires_spawn_and_wait(managed, tools):
+    caps = copy.deepcopy(managed[0]["policy"]["host"])
+    caps["tools"] = tools
+    with pytest.raises(ValueError, match="Host needs native spawn_agent and wait"):
+        evidence.validate_capabilities(caps)
+
+
+@pytest.mark.parametrize("limit", [None, 0, -1, True, "1"])
+def test_host_without_listing_keeps_host_limit_validation(managed, limit):
+    caps = copy.deepcopy(managed[0]["policy"]["host"])
+    caps["tools"].remove("list_agents")
+    caps["maxAgents"] = limit
+    with pytest.raises(ValueError, match="maxAgents"):
+        evidence.validate_capabilities(caps)
+
+
+def test_host_without_listing_keeps_preparation_and_concurrency_checks(managed):
+    flow, project, root, home = managed
+    caps = copy.deepcopy(flow["policy"]["host"])
+    caps["tools"].remove("list_agents")
+    caps["forkParameter"] = "fork_context"
+    caps["maxAgents"] = 1
+    flow = w.new_workflow(
+        "listing-free", project_root=project, artifact_root=root,
+        profile="standard", host=caps,
+    )
+    managed = (flow, project, root, home)
+    first = register(managed, task_id="first", parallel=True)
+    register(managed, task_id="second", scopes=("other.py",), parallel=True)
+    prepared = planning.prepare_spawn(flow, "first")
+    assert prepared["fork_context"] is False
+    w.record_spawn(
+        flow, task_id="first", agent_id="agent", actual_model=first["requestedModel"]
+    )
+    before = copy.deepcopy(flow)
+    with pytest.raises(ValueError, match="concurrency limit"):
+        planning.prepare_spawn(flow, "second")
+    assert flow == before
+    path, report = transcript(managed, "first", "agent")
+    w.record_run(
+        flow, task_id="first", agent_id="agent", report=report, transcript_path=path
+    )
+    w.record_close(
+        flow, task_id="first", agent_id="agent", status="unsupported",
+        transcript_path=path,
+    )
+    flow["policy"]["host"]["tools"].remove("wait_agent")
+    before = copy.deepcopy(flow)
+    with pytest.raises(ValueError, match="Host needs native spawn_agent and wait"):
+        planning.prepare_spawn(flow, "second")
+    assert flow == before
+    flow["policy"]["host"]["tools"].append("wait_agent")
+    planning.prepare_spawn(flow, "second")
+
+
+def test_host_without_listing_keeps_strict_close_evidence(managed):
+    flow = managed[0]
+    flow["policy"]["host"]["tools"] = ["spawn_agent", "wait_agent", "close_agent"]
+    flow["policy"]["host"] = evidence.validate_capabilities(flow["policy"]["host"])
+    assert flow["policy"]["host"]["lifecycle"] == "strict-close"
+    task = register(managed)
+    planning.prepare_spawn(flow, "work")
+    w.record_spawn(
+        flow, task_id="work", agent_id="agent", actual_model=task["requestedModel"]
+    )
+    path, _ = transcript(managed, "work", "agent")
+    with pytest.raises(ValueError, match="close_agent result"):
+        w.record_close(
+            flow, task_id="work", agent_id="agent", status="closed",
+            transcript_path=path,
+        )

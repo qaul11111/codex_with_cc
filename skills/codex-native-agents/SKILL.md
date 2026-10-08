@@ -32,6 +32,10 @@ the lack of delegation afterward.
   I will trace the unrelated transport failure." If direct, name the coupling,
   missing capability, serial restriction, or insufficient benefit. "Main can do
   it" and "the main model is Astra" are not reasons to skip eligible delegation.
+- Native dispatch requires `spawn_agent` and `wait_agent` (or legacy `wait`).
+  `list_agents` is optional; if absent, track returned agent IDs and retain the
+  existing concurrency, terminal-evidence and close checks. Never invent a tool
+  or substitute a chat-listing API in the capability snapshot.
 - If the split is useful and allowed, perform capability preflight, prepare and
   dispatch it. An assessment alone does not fulfill an eligible dispatch. If
   preflight or admission blocks it, explain the actual blocker and continue
