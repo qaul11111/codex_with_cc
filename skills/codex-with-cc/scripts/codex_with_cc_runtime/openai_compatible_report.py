@@ -268,6 +268,9 @@ def run_openai_compatible_report_delegate(ns: argparse.Namespace) -> int:
     depends_on = [safe_task_id(item) for item in normalize_delegate_list(ns.depends_on)]
 
     artifact_root, fallback_reason = _resolve_artifact_root(ns.artifact_root)
+    if not trusted_local_fallback and not ns.dry_run:
+        from .lifecycle import require_lifecycle_preflight
+        require_lifecycle_preflight(artifact_root, workflow_id)
     verifier_snapshot = capture_final_verifier_snapshot(artifact_root, workflow_id) if role == "final-verifier" else None
     run_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]}_{uuid.uuid4().hex[:8]}"
     paths = _build_paths(artifact_root, run_id, ns.output_path)

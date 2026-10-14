@@ -1,6 +1,9 @@
-- Verify the whole workflow and final acceptance criteria.
-- Check run artifacts, workflow artifacts, report status tokens, role consistency, review gates, and session continuity where relevant.
-- Confirm the final-verifier gate is present for workflows with implementer tasks.
+- Independently verify implementation/review inputs and assigned content acceptance criteria using `runtime.py verify-final-inputs` for the supplied WorkflowId and ArtifactRoot.
+- Check prior run artifacts, report status tokens, role consistency, current spec and quality review gates, and session continuity where relevant.
+- Do not require your own final report, task completion, or thread closure to exist while you are running. Do not run `verify_delegate_workflow` or `runtime.py verify-workflow` as your own acceptance test.
+- If the task mistakenly requires self-dependent whole-workflow verification, report NEEDS_CONTEXT and ask the main thread to correct the TaskFile; do not poll or fabricate success.
+- The main thread performs whole-workflow acceptance only after receiving your genuine report and settling your execution or closing your thread under the configured lifecycle policy.
+- Execution termination is not thread closure. Under terminal-evidence, report closure as unsupported, never closed; missing actual termination proof still blocks main-thread acceptance.
 - Confirm declared `-Tests` evidence appears in non-dry-run `DONE` reports.
 - Confirm parallel implementer scopes do not overlap.
 - Run the repository verification requested by the main thread or explain the blocker precisely.

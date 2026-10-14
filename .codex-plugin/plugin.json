@@ -1,7 +1,7 @@
 {
   "name": "codex-with-cc",
-  "version": "1.2.0",
-  "description": "A Codex plugin for delegating Codex child-agent work to Claude Code CLI with workflow artifacts.",
+  "version": "1.2.0+codex.20260916080909",
+  "description": "Keep main focused on decisions and acceptance; delegate substantial exploration, implementation and checks with compact evidence.",
   "author": {
     "name": "xdd666t"
   },
@@ -17,8 +17,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex With CC",
-    "shortDescription": "Codex plugin for the Claude Code delegation workflow.",
-    "longDescription": "Routes Codex main thread planning into staged Codex child-agent execution that is handed off to Claude Code CLI with workflow/task/run artifacts, and is distributed marketplace-first through aiskyhub/aiskyhub for Codex installations.",
+    "shortDescription": "Codex and Claude Code workers with focused main acceptance.",
+    "longDescription": "Keeps simple known-location low-risk tasks in main and delegates substantial exploration, implementation, tests and repair to end-to-end workers. Main controls routing and focused acceptance with compact result cards and traceable evidence. Preserves explicit Claude provider choices; native is selectable when routing permits. Supports standard and strict workflows plus personal marketplace development and aiskyhub/aiskyhub distribution.",
     "developerName": "xdd666t",
     "category": "Development",
     "capabilities": [
@@ -26,8 +26,8 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Use the codex-with-cc workflow to delegate child-agent implementation through Claude Code CLI.",
-      "Review this repository and explain how Codex main thread planning flows into workflow/task/run Claude Code CLI execution.",
+      "Use codex-with-cc: finish simple known-location low-risk tasks directly, delegate substantial work end to end, and keep main focused on decisions and acceptance.",
+      "Use the current Claude provider for this implementation; return compact result cards and evidence links, with main reviewing targeted changes.",
       "Ensure the aiskyhub/aiskyhub marketplace is available, then install codex-with-cc@aiskyhub for user scope."
     ]
   }

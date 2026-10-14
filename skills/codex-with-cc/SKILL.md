@@ -1,124 +1,89 @@
 ---
 name: codex-with-cc
-description: Force Codex with delegated worker routing for any child-agent, subagent, sub-agent, child-thread, subthread, delegation, worker-execution, 子代理, 子线程, 多代理, 委派, 派工, or 执行层 task; use this skill whenever Codex must plan, dispatch, review, or execute work through child agents instead of default subagent behavior.
+description: Coordinate Claude Code or native Codex delegation with a clean main context. Main plans and reviews; end-to-end workers explore, implement, test and repair within explicit scope.
 ---
 
 # Codex with CC
 
-## Core Rule
+For authorized development using this workflow, keep main focused on requirements,
+decisions, task boundaries and final acceptance. Workers own substantial repository
+exploration, implementation, test execution and local repair. Main may directly finish simple,
+known-location, low-risk small tasks. Ambiguous, exploration-heavy or substantial
+coupled work goes to one end-to-end worker; parallelize larger independent scopes
+when useful. Do not move substantial work back to main to claim speed. Discussion
+alone never starts workers, and explicit user routing and permission boundaries prevail.
 
-Use this skill as the mandatory entry point for every child-agent, subagent, sub-agent, child-thread, subthread, delegation, worker-execution, 子代理, 子线程, 多代理, 委派, 派工, or 执行层 request.
+Read [references/astra-workflows.md](references/astra-workflows.md) for commands and
+[references/lifecycle.md](references/lifecycle.md) for the selected route before dispatch. Read
+[CODEX_WITH_CC.md](CODEX_WITH_CC.md) only for legacy runners or session diagnostics.
+Load sibling skills only for needed detail.
 
-Do not satisfy a triggered request with default Codex subagent behavior, direct Claude Code CLI execution, direct `claude` execution, or direct main-thread execution of bundled delegate scripts.
+## Main-owned decisions
 
-## Workflow Contract
+- Main resolves product ambiguity, chooses scope, backend, model, effort and acceptance
+  depth. Workers make routine implementation choices inside those boundaries.
+- Preserve the user's current Claude provider choice. For Claude work, prefer
+  supported `claude-process`: the fixed launcher runs Claude without a Codex model
+  carrier. Use legacy `claude-code` when needed, or native only when routing permits.
+  Never silently replace Claude to claim speed. Workflow defaults can be overridden per task with a decision reason;
+  verify support and preserve each attempt's original settings.
+- Prefer `standard` with focused main review and relevant executed checks. Add a
+  targeted independent reviewer when useful. Select `strict` for required or justified
+  independent spec/quality/final review; it is not mandatory for ordinary changes.
+- Configure `MaxParallel` from actual host capacity. For a chosen ready task, use
+  `prepare-task -Admit` to prepare and admit in one call. Use `ready-tasks` and
+  separate `admit-task` only when queue/dependencies justify them; `advise-task`
+  is optional decision support. Queued preparation is not dispatch. While workers
+  execute, main handles decisions, dependencies and acceptance.
+  Delegated failures return to a worker for diagnosis/repair; main replans repeated failures.
 
-Read `CODEX_WITH_CC.md` in this skill directory before using the workflow. Treat it as the human contract for task-file-only dispatch, workflow/task/run artifacts, role rules, review gates, and verification. Treat `contract.json` as the machine-readable source for trigger patterns, report headings, roles, status tokens, spawn metadata, and forbidden legacy arguments.
+## Compact work and results
 
-This skill is distributed through a plugin-managed installation. When invoking bundled scripts, run them from the target project's current working directory so `.codex/codex_with_cc` tasks and artifacts are written to that project, not to the plugin cache.
+Each TaskFile retains Goal, Allowed Scope, Forbidden Actions, Acceptance Criteria,
+Verification and Report Requirements. A few precise lines per section are sufficient.
+Do not micro-delegate files or impose discovery → implementation → testing handoffs.
+One worker should explore, change, check and repair a coherent assignment.
 
-The required chain is always Codex main thread to Codex child thread to a bundled delegate runner:
+Worker reports contain Status, Role, Summary, Changed Files, Verification, Findings,
+Final Result and Risks Or Follow-ups. Return a brief result card with changed paths,
+check outcomes, risks and evidence links; keep full logs and detailed reports in
+artifacts. Main reads the card first, follows relevant evidence, and pulls targeted
+diffs where needed for an informed decision. Avoid relaying whole reports or redoing
+worker exploration. Formatting variations are accepted; missing/duplicate fields
+and inconsistent Status/Final Result are rejected. Preserve the original report.
 
-```text
-Implementation or code-capable work:
-Codex main thread -> Codex spawn_agent child thread -> delegate_to_claude.* -> Claude Code CLI
+## Execution and acceptance
 
-Report-only workflow judgment, preflight, audit, acceptance report, or report normalization:
-Codex main thread -> Codex spawn_agent child thread -> delegate_to_openai_compatible_report.* -> OpenAI-compatible Chat Completions API
-```
+For `claude-process`, main prepares exact task-specific commands and a bounded
+timeout, then invokes the literal no-argument fixed launcher in the prepared
+directory. Runtime checks the immutable plan, main-host identity, provider and
+command pins. This is a worker process, not a Codex child; no carrier model runs.
+Legacy Claude carriers only launch and relay; native workers execute directly.
+For child routes preserve admitted model, effort, task_name, WorkflowPlan and
+fork_turns. Never bypass the launcher or mutate global provider configuration.
+Claude session reuse is limited to runtime-supported safe continuity; every Codex
+host attempt is fresh and settled attempts cannot be reused.
 
-The installed plugin also declares `./hooks/hooks.json` so Codex hosts with hooks enabled can inject this contract at session start, reinforce it on matching user prompts, and deny supported non-compliant tool calls.
+Processes retain PID/start/exit and report evidence under `process-exit`, with
+bounded timeout cancellation; never invent agent IDs or thread closure for them.
+Record actual returned agent IDs for child routes. For native terminal-evidence workflows, use
+`record-native-run -Settle` to import and settle in one call; strict-close requires
+the actual host close flow. Use `review-packet` for a bounded advisory result card,
+then follow relevant original evidence. Every attempt retains original host
+provenance and terminal evidence. Interrupt is not closure. Verified end with no
+close interface is “执行已结束；宿主不提供线程关闭接口。”
 
-Fixed-launcher shortcut (macOS 1.2.0+): install `codex-with-cc-launch` with `<installed-workflow-root>/macos_scripts/install-codex-with-cc-launch.sh`, prepare one descriptor directory per child attempt with a `launch.json`, set that directory as the terminal tool working directory, and run the literal `/Users/<user>/.codex/bin/codex-with-cc-launch` command (no `$HOME`, no extra args, no chaining, and no extra `zsh -c` wrapper in the tool command). The launcher takes no arguments, validates the descriptor schema and safety, verifies thread binding, and delegates to the existing runtime.
+For `standard`, judge scope and quality from actual changes and relevant evidence,
+invoke the deterministic `run-checks` acceptance gate, record `record-main-review`,
+then `verify-workflow`. Worker test logs do not automatically substitute for that
+gate. Once its evidence is current, rerun only for changed covered inputs/runs,
+failed checks or unresolved risk. Main retains final judgment and explicitly
+disposes of non-blocking DONE_WITH_CONCERNS findings. Missing verification, FAIL,
+BLOCKED and NEEDS_CONTEXT cannot be waived into completion.
 
-## Operating Method
-
-Use this workflow as a Superpowers-style staged control loop, not as a prompt shortcut:
-
-1. Design gate: clarify intent, constraints, success criteria, and acceptance evidence before dispatch.
-2. Plan gate: split work into bounded task files with `Goal`, `Allowed Scope`, `Forbidden Actions`, `Acceptance Criteria`, `Verification`, and `Report Requirements`.
-3. Task validation gate: run `validate_delegate_task.*` when preparing task files or when scope/review metadata is easy to get wrong.
-4. Dispatch gate: use fresh child threads that inherit the main-thread model and reasoning effort; use `fork_context: false` or the host equivalent `fork_turns: "none"`.
-5. Implementer gate: require test-first or verification-first evidence when changing behavior.
-6. Review gate: review every implementation in two passes, spec compliance first, then code quality and regression risk.
-7. Final-verifier gate: finish only after workflow-level verification confirms run artifacts, workflow artifacts, accepted review gates, final-verifier evidence, parallel scope safety, session continuity when relevant, and repository tests support acceptance.
-
-Workers are context consumers, not decision owners. Codex main thread owns architecture, task boundaries, acceptance, rework decisions, and final delivery.
-
-The Codex child thread must:
-
-- Set `CODEX_CLAUDE_CHILD_THREAD=1` before invoking the selected bundled delegate runner.
-- Pass task instructions through `.codex/codex_with_cc/tasks/<yyyyMMdd>/<HHmmssfff>-<short-id>-<task-name>.md` with `-TaskFile`.
-- Pass `-WorkflowId`, `-TaskId`, `-Role`, and `-SessionKey`.
-- Reviewer runs must also pass `-ReviewForTaskId`, `-ReviewForRunId`, and `-ReviewKind`; the run id must be the target implementer's current run.
-- Avoid legacy inline `-Task`, legacy `-Mode`, and implicit session-key fallback.
-- Keep changes inside the delegated scope and pass `-Scope` for any parallel writable work.
-- Run the requested verification only for code-capable Claude worker tasks. Report-only OpenAI-compatible tasks must not execute shell tests and should treat `-Tests` as report requirements.
-- Ensure any command passed through `-Tests` appears with an outcome in the worker's `Verification` report.
-
-Task files that omit required sections, leave sections empty, keep obvious placeholders, or omit required report headings are rejected before the worker runner starts. This keeps worker context explicit and removes the old one-line prompt path.
-
-## Multi-Skill Chain
-
-Use these sibling skills when the work has enough surface area to need staged control:
-
-- `$codex-with-cc-planning`: turn the request into task files, acceptance criteria, dependencies, and review gates.
-- `$codex-with-cc-dispatching`: choose serial or parallel delegation and assign WorkflowId/TaskId/Role/SessionKey values.
-- `$codex-with-cc-worker`: define the worker task file and scope for Claude Code execution.
-- `$codex-with-cc-reviewing`: review worker reports, findings, verification, changed files, and review gate state.
-- `$codex-with-cc-finishing`: verify the whole workflow and prepare final delivery.
-
-## Main Thread Duties
-
-In the main Codex thread:
-
-- Understand the user request, define scope, choose serial or parallel delegation, and review all worker results.
-- Prefer serial execution when write scopes overlap or acceptance criteria are still unstable.
-- Use parallel execution only for independent read-only tasks or writable tasks with explicit non-overlapping `-Scope` values.
-- Spawn every independent task before waiting, batch-wait on all active agent ids, and process whichever finishes first.
-- Immediately record every returned agent id with `record-agent-spawn`; after `close_agent`, record the matching closure with `record-agent-close`. Close failed and interrupted attempts too.
-- Do not run `claude` directly.
-- Do not run bundled delegate scripts directly except when `CODEX_WITH_CC.md` explicitly allows the trusted local terminal fallback; that fallback must pass `-TrustedLocalFallback`.
-- Verify each run with `verify_delegate_run.*` or `verify_delegate_artifacts.*`.
-- Verify the whole workflow with `verify_delegate_workflow.*`; use `verify_delegate_chain.*` when validating primary/parallel session continuity.
-- Reject implementer work until both `spec` and `quality` reviewer runs are accepted.
-- Reject implementer workflows without an accepted `final-verifier` task.
-- Reject parallel implementer runs whose writable scopes overlap.
-- Do not summarize a worker as successful until the artifacts and the worker's verification evidence both support that claim.
-
-## Worker Report Contract
-
-Every worker must finish with these exact headings:
-
-```text
-Status
-Role
-Summary
-Changed Files
-Verification
-Findings
-Final Result
-Risks Or Follow-ups
-```
-
-`Status` and `Final Result` must use the same token:
-
-```text
-DONE
-DONE_WITH_CONCERNS
-NEEDS_CONTEXT
-BLOCKED
-FAIL
-```
-
-`Role` must use one of:
-
-```text
-planner
-implementer
-researcher
-reviewer
-final-verifier
-```
-
-Verification must list commands actually run and their outcomes. A `DONE` report without concrete verification evidence is invalid. If verification is blocked, the worker must explain the blocker and whether it is unrelated to the delegated change.
+Checks cover the whole project by default; scoped evidence requires complete
+input/dependency declarations. For `strict`, reviews bind current implementation
+runs and the final worker uses `verify-final-inputs`. Main accepts after settlement.
+Cancel unnecessary undispatched plans with `cancel-prepared-task`. Use `inspect-runs`
+and `workflow-metrics` when needed; missing usage is unknown, estimates are not bills,
+and lower elapsed time or cost must be measured rather than promised.

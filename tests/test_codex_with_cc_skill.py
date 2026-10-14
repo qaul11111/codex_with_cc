@@ -64,51 +64,15 @@ def test_codex_with_cc_skill_contract() -> None:
     assert description_match, "description is required"
     description = description_match.group(1)
     assert len(description) <= 1024
-    for trigger in (
-        "child-agent",
-        "subagent",
-        "sub-agent",
-        "child-thread",
-        "subthread",
-        "delegation",
-        "worker-execution",
-        "子代理",
-        "子线程",
-        "多代理",
-        "委派",
-        "派工",
-        "执行层",
-    ):
-        assert trigger in description
-
-    for required in (
-        "spawn_agent",
-        "CODEX_CLAUDE_CHILD_THREAD=1",
-        "delegate_to_claude",
-        "WorkflowId",
-        "TaskId",
-        "Role",
-        "current working directory",
-        "inherit the main-thread model",
-        "fork_turns: \"none\"",
-        "Status",
-        "Role",
-        "Summary",
-        "Changed Files",
-        "Verification",
-        "Findings",
-        "Final Result",
-        "Risks Or Follow-ups",
-        "Operating Method",
-        "spec compliance",
-        "workflow-level verification",
-        "validate_delegate_task",
-        "final-verifier",
-    ):
-        assert required in text
+    # Entry instructions route to focused references; detailed transport rules
+    # no longer have to be duplicated in every phase skill.
+    assert "delegation" in description and "Claude Code" in description and "main" in description
+    for reference in re.findall(r"\]\(([^)]+\.md)\)", text):
+        assert (skill / reference).is_file(), reference
+    for command in ("ready-tasks", "admit-task", "record-main-review", "verify-workflow"):
+        assert command in text
     assert "check_subagent_gate" not in text
     assert "installed globally under `$CODEX_HOME/skills/codex-with-cc`" not in text
-    assert "plugin-managed installation" in text
 
     metadata = openai_yaml.read_text(encoding="utf-8")
     assert 'display_name: "Codex with CC"' in metadata
@@ -119,7 +83,8 @@ def test_codex_with_cc_skill_contract() -> None:
     contract = (skill / "CODEX_WITH_CC.md").read_text(encoding="utf-8")
     assert "workflow/task/run" in contract
     assert "Workflow Method" in contract
-    assert "Review in two passes" in contract
+    assert "Standard has no mandatory separate review workers" in contract
+    assert "Strict requires current spec and quality reviewers" in contract
     assert "Status and Final Result must match" in contract
     assert "planner" in contract
     assert "implementer" in contract
@@ -137,7 +102,7 @@ def test_codex_with_cc_skill_contract() -> None:
         assert skill_openai_yaml.exists()
         skill_text = skill_file.read_text(encoding="utf-8")
         assert "codex-with-cc" in skill_text
-        assert "CODEX_WITH_CC.md" in skill_text
+        assert "CODEX_WITH_CC.md" in skill_text or "references/astra-workflows.md" in skill_text
         skill_metadata = skill_openai_yaml.read_text(encoding="utf-8")
         display_name = workflow_skill_display_names[skill_name]
         assert f'display_name: "{display_name}"' in skill_metadata

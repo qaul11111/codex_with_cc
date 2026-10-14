@@ -43,7 +43,11 @@ def parse_report_final_result(text: str | None) -> str:
     if not text:
         return ""
     final_result = report_section(text, "Final Result").splitlines()[0].strip().upper() if report_section(text, "Final Result") else ""
-    return final_result if final_result in REPORT_STATUS_VALUES else ""
+    if final_result in REPORT_STATUS_VALUES:
+        return final_result
+    # An explicit result followed by a sentence is still an unambiguous label.
+    prefix = final_result.split(".", 1)[0]
+    return prefix if final_result.startswith(prefix + ". ") and prefix in REPORT_STATUS_VALUES else ""
 
 
 def parse_report_role(text: str | None) -> str:
@@ -65,7 +69,8 @@ def report_summary_line(text: str | None) -> str:
 
 
 def report_heading_match(text: str, heading: str) -> re.Match[str] | None:
-    pattern = rf"(?m)^\s*{re.escape(heading)}\s*$"
+    # Parse presentation variations without changing the original evidence.
+    pattern = rf"(?im)^[ \t]*(?:#{{1,6}}[ \t]+)?(?:\*\*)?{re.escape(heading)}(?:\*\*)?[ \t]*(?::[ \t]*|$)"
     return re.search(pattern, text)
 
 
@@ -95,16 +100,11 @@ def text_has_required_report_headings(text: str | None) -> bool:
     if not text or not text.strip():
         return False
     text = _text_outside_fenced_blocks(text)
-    first_content = next((line.strip() for line in text.splitlines() if line.strip()), "")
-    if first_content != "Status":
-        return False
-    positions: list[int] = []
     for heading in REPORT_HEADINGS:
         match = report_heading_match(text, heading)
-        if match is None:
+        if match is None or len(list(re.finditer(match.re, text))) != 1:
             return False
-        positions.append(match.start())
-    return positions == sorted(positions) and bool(parse_report_status(text))
+    return bool(parse_report_status(text))
 
 
 

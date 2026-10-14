@@ -127,7 +127,6 @@ if [[ $# -ne 0 ]]; then
   exit 2
 fi
 
-export {CHILD_MARKER_NAME}={shlex.quote(CHILD_MARKER_VALUE)}
 exec {shlex.quote(str(python_executable))} {shlex.quote(str(runtime_entrypoint))}
 """
 
@@ -230,6 +229,7 @@ ALLOWED_TOP_LEVEL_FIELDS = {
     "name",
     "namePrefix",
     "maxBudgetUsd",
+    "workerEffort",
     "sessionLeaseTimeoutSeconds",
     "sessionLeaseWaitSeconds",
     "resetPrimarySession",
@@ -334,6 +334,8 @@ def validate_descriptor(descriptor: dict[str, Any]) -> None:
         if isinstance(value, str) and not Path(value).expanduser().is_absolute():
             problems.append(f"{key} must be an absolute path")
 
+    if descriptor.get("workerEffort") is not None and descriptor["workerEffort"] not in ("low", "medium", "high", "max"):
+        problems.append("workerEffort must be low, medium, high or max")
     budget = descriptor.get("maxBudgetUsd")
     if budget is not None and (
         isinstance(budget, bool) or not isinstance(budget, (str, int, float))
@@ -406,6 +408,21 @@ def read_launch_descriptor(cwd: Path | None = None) -> dict[str, Any]:
 
     if not isinstance(parsed, dict):
         raise LaunchError("launch.json must be a JSON object")
+    plan_path = descriptor_path.parent / "plan.json"
+    if plan_path.exists():
+        from .routing import verified_plan
+        from .host_evidence import verify_active_child
+        plan, _ = verified_plan(plan_path)
+        if plan.get("backend") == "claude-process":
+            from .process_run import validate_process_launch
+            validate_process_launch(descriptor_path.parent)
+            return parsed
+        if plan.get("backend") != "claude-code" or parsed != plan.get("launchTemplate"):
+            raise LaunchError("Prepared launch descriptor differs from its pinned template")
+        actual = os.environ.get("CODEX_THREAD_ID", "")
+        verify_active_child(actual, plan["projectRoot"], plan["model"], plan_path)
+        # Binding is in memory: keep the original prepared descriptor immutable.
+        parsed["childThread"] = {"threadId": actual}
     return parsed
 
 
@@ -458,6 +475,24 @@ def check_thread_binding(descriptor: dict[str, Any]) -> None:
 
 def claim_descriptor(descriptor_dir: Path) -> None:
     directory = _absolute_without_resolving(descriptor_dir)
+    plan_path = directory / "plan.json"
+    if plan_path.exists():
+        from .routing import verified_plan
+        from .workflow import workflow_lock_path
+        from .locks import acquire_file_lock
+        plan, _ = verified_plan(plan_path)
+        lock = acquire_file_lock(workflow_lock_path(plan["artifactRoot"], plan["workflowId"]), 30, .05,
+                                 lambda: "Prepared launcher claim is locked")
+        try:
+            verified_plan(plan_path)
+            _claim_descriptor(directory)
+        finally:
+            lock.release()
+        return
+    _claim_descriptor(directory)
+
+
+def _claim_descriptor(directory: Path) -> None:
     claim_path = directory / "claimed"
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -519,6 +554,7 @@ def build_delegate_args(descriptor: dict[str, Any]) -> list[str]:
         ("artifactRoot", "-ArtifactRoot"),
         ("outputPath", "-OutputPath"),
         ("model", "-Model"),
+        ("workerEffort", "-WorkerEffort"),
         ("name", "-Name"),
         ("namePrefix", "-NamePrefix"),
         ("maxBudgetUsd", "-MaxBudgetUsd"),
@@ -565,13 +601,54 @@ def main(argv: list[str] | None = None) -> int:
 
     descriptor_dir = _absolute_without_resolving(Path.cwd())
     descriptor = read_launch_descriptor(descriptor_dir)
+    if descriptor.get("invocation") == "codex_with_cc_process":
+        from .process_run import run_process
+        return run_process(descriptor_dir)
     validate_descriptor(descriptor)
     check_thread_binding(descriptor)
     check_paths(descriptor)
     claim_descriptor(descriptor_dir)
 
     os.environ[CHILD_MARKER_NAME] = CHILD_MARKER_VALUE
-    return run_delegate(
-        build_delegate_args(descriptor),
-        Path(descriptor["projectWorkingDirectory"]),
-    )
+    plan_path = descriptor_dir / "plan.json"
+    if not plan_path.is_file():
+        return run_delegate(build_delegate_args(descriptor), Path(descriptor["projectWorkingDirectory"]))
+
+    # The claimed prepared descriptor is unique. Keep complete diagnostics on
+    # disk and deliver a bounded machine view, including nonzero exit outcomes.
+    from contextlib import redirect_stdout, redirect_stderr
+    from .packets import run_packet
+    from .io_utils import load_json
+    from .routing import verified_plan
+    from .workflow import workflow_path
+    plan, _ = verified_plan(plan_path)
+    log_path = descriptor_dir / "carrier-output.log"
+    execution_error = None
+    with log_path.open("x", encoding="utf-8") as log, redirect_stdout(log), redirect_stderr(log):
+        try:
+            code = run_delegate(build_delegate_args(descriptor), Path(descriptor["projectWorkingDirectory"]))
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            code = 1
+            execution_error = str(exc)[:500]
+    result = {"exitCode": code, "runId": None, "logPath": str(log_path),
+              "advisoryOnly": True, "deliveryStatus": "complete"}
+    if execution_error is not None:
+        result["executionError"] = execution_error
+    try:
+        root = Path(plan["artifactRoot"])
+        state = load_json(workflow_path(root, plan["workflowId"]))
+        rid = state["preparedTasks"][plan["planId"]].get("runId")
+        result["runId"] = rid
+        if rid:
+            result["packet"] = run_packet(root, state, rid)
+    except Exception as exc:
+        # Preserve the actual execution exit code even if the delivery view fails.
+        import traceback
+        with log_path.open("a", encoding="utf-8") as log:
+            traceback.print_exc(file=log)
+        result["deliveryStatus"] = "failed"
+        result["packetError"] = str(exc)[:500]
+    print(json.dumps(result, ensure_ascii=False))
+    return code if code else (1 if result["deliveryStatus"] == "failed" else 0)

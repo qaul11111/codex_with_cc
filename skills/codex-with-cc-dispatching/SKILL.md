@@ -1,34 +1,55 @@
 ---
 name: codex-with-cc-dispatching
-description: Dispatch codex-with-cc tasks through the required Codex child thread to delegate_to_claude.* to Claude Code CLI chain with WorkflowId, TaskId, Role, and Scope metadata.
+description: Dispatch end-to-end Claude Code or native Codex workers with pinned routing, exact scope and host provenance.
 ---
 
 # Codex with CC Dispatching
 
-Read `../codex-with-cc/CODEX_WITH_CC.md` before dispatching. Use this skill after planning has produced task boundaries.
+Read `../codex-with-cc/references/astra-workflows.md` for prepared routes and
+`../codex-with-cc/references/lifecycle.md` for actual host lifecycle support.
 
-Dispatch rules:
+Configure defaults and MaxParallel from available host capacity. Prepare coherent
+end-to-end assignments with explicit reads/writes and dependencies. For a chosen
+ready task, prefer `prepare-task -Admit`; it preserves locked admission and slot
+reservation. Use `ready-tasks` and separate `admit-task` when queue/dependencies
+justify them. Preserve the returned model, effort, task_name, WorkflowPlan and
+fork_turns payload.
+Simple known-location low-risk work may stay in main without a workflow.
+Delegated coupled work needs one end-to-end worker rather than sequential handoffs.
 
-- Every child thread inherits the main-thread model and reasoning effort; use `fork_context: false` or the host equivalent `fork_turns: "none"`.
-- Every worker command sets `CODEX_CLAUDE_CHILD_THREAD=1`.
-- Every worker command passes `-TaskFile`, `-WorkflowId`, `-TaskId`, `-Role`, and `-SessionKey`.
-- Run `validate_delegate_task.*` before dispatch when the task file was generated, contains reviewer metadata, or carries explicit `-Tests` commands.
-- Never dispatch legacy inline `-Task`, legacy `-Mode`, or a command that relies on an implicit session key.
-- Reviewer commands must pass `-ReviewForTaskId`, the current implementer `-ReviewForRunId`, and `-ReviewKind spec` or `-ReviewKind quality`.
-- Parallel writable tasks require explicit non-overlapping `-Scope` values.
-- Use `PrimaryAnchor` for a parallel batch anchor, `ParallelPool` for independent side work, and `PrimaryReuse` for serial follow-up.
+For supported Claude work prefer `claude-process`: prepare exact commands with
+`AllowedCommandsFile` and a bounded `ExecutionTimeoutSeconds`, then main invokes
+the literal no-argument fixed launcher in its admitted directory. Runtime validates
+the immutable plan, main-host identity, provider and command pins. It launches an
+external Claude process with no Codex carrier model, child marker or agent ID.
+Use process-exit evidence and preserve the user's provider choice.
 
-Dispatch discipline:
+For child routes, spawn chosen independent tasks before waiting and record returned IDs immediately.
+Use host-supported waits across active children; process completed cards and admit
+newly ready work without waiting for unrelated children. Main handles requirement
+and acceptance decisions while workers explore, implement, test and repair.
+Uncertain spawn results retain their reservation until original evidence resolves it.
 
-- Dispatch the immediate blocking task locally only when no child-thread delegation is needed; otherwise create the Codex child thread and keep the main thread focused on review.
-- Put all worker instructions in a TaskFile with `Goal`, `Allowed Scope`, `Forbidden Actions`, `Acceptance Criteria`, `Verification`, and `Report Requirements`; the runtime rejects old one-line prompts.
-- Include the exact verification commands in the task file and pass them with `-Tests` when possible.
-- The worker's final `Verification` report must include every command passed with `-Tests` and the observed outcome.
-- Dispatch implementer, spec reviewer, and quality reviewer as separate task ids so the workflow artifact can prove acceptance.
-- Dispatch a final-verifier task for any workflow with implementer tasks.
-- Use parallel dispatch only after scope boundaries are explicit enough to avoid file conflicts.
-- Spawn all independent tasks before the first wait. Wait on all active agent ids in one call and process whichever completes first.
-- Record each returned id with `runtime.py record-agent-spawn`. Close every completed, failed, interrupted, or replaced attempt, then record it with `runtime.py record-agent-close`.
-- After a parallel batch, wait for the anchor and side tasks before serial review or follow-up implementation.
+Preserve current Claude provider selection. A legacy `claude-code` carrier invokes the no-argument
+fixed launcher in its prepared directory and relays the compact outcome and evidence
+pointers. It does not explore the repo, plan implementation or duplicate the worker's
+reasoning. Native children execute directly only when user routing permits, and
+return an original report. Prefer `record-native-run -Settle` for native
+terminal-evidence workflows; strict-close still needs the actual host close flow. Never switch to native just to
+claim speed or let a carrier substitute its own implementation for Claude.
 
-Do not dispatch default Codex workers outside the codex-with-cc chain.
+Model, effort and budget changes require a fresh plan. Failures return to a worker
+for bounded diagnosis/repair; main decides replanning after repeated failures.
+Runtime-supported Claude session continuity may reuse worker context safely; it
+never permits reusing a settled Codex host attempt. Each attempt has a fresh
+descriptor, preserved original settings and real provenance; child routes also need
+a fresh child. Process attempts retain actual PID/start/exit receipts.
+
+For child routes, settle every attempt by real closure or verified terminal evidence when closure is
+unavailable. Interrupt is not closure. Cancel unnecessary undispatched plans
+formally. Read `review-packet` as an advisory summary, following relevant original
+evidence as needed. Standard uses focused main acceptance and current executed checks;
+strict additionally requires its independent reviewer/final tasks.
+
+Read `../codex-with-cc/CODEX_WITH_CC.md` only when maintaining legacy descriptors
+or supported Claude session modes.

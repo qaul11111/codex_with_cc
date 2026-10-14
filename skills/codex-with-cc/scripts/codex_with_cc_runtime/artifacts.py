@@ -10,7 +10,9 @@ from .common import ARTIFACT_SCHEMA_VERSION, CHILD_MARKER_NAME, INVOCATION_CONTR
 from .io_utils import load_json, write_json
 from .paths import project_artifact_root, user_artifact_root
 from .reports import parse_report_final_result, parse_report_role, parse_report_status, path_has_required_report_headings, report_section
-from .workflow import REQUIRED_IMPLEMENTER_REVIEWS, current_final_verifier, workflow_path
+from .workflow import REQUIRED_IMPLEMENTER_REVIEWS, current_final_verifier, update_workflow_acceptance, workflow_path
+from .lifecycle import verify_lifecycle_evidence
+from .execution_policy import profile, verify_project
 
 
 
@@ -29,7 +31,7 @@ def resolve_artifact_root(artifact_root_value: str | None, run_id: str | None = 
     return candidates[0]
 
 
-def verify_artifacts(run_id: str, artifact_root_value: str | None) -> dict[str, Any]:
+def verify_artifacts(run_id: str, artifact_root_value: str | None, *, recover_status: bool = True, allow_interrupted: bool = False) -> dict[str, Any]:
     root = resolve_artifact_root(artifact_root_value, run_id=run_id)
     config_path = root / f"config_{run_id}.json"
     status_path = root / f"status_{run_id}.json"
@@ -38,6 +40,18 @@ def verify_artifacts(run_id: str, artifact_root_value: str | None) -> dict[str, 
             raise DelegateError(f"Missing delegate {label}: {path}")
     config = load_json(config_path)
     status = load_json(status_path)
+    if config.get("runnerType") == "claude_process":
+        from .process_run import verify_process
+        return verify_process(root, run_id, config, status)
+    if config.get("runnerType") == "codex_native":
+        if status.get("status") == "interrupted" and not allow_interrupted:
+            raise DelegateError("Native execution interrupted; resume with a new run")
+        from .native_run import verify_native
+        return verify_native(root, run_id, config, status)
+    if status.get("status") in ("interrupted", "abandoned"):
+        if not allow_interrupted or status.get("status") != "interrupted":
+            raise DelegateError(f"Delegate execution {status['status']}; resume with a new run, not report recovery")
+        return verify_interrupted(root, run_id, config, status)
     output_path = Path(str(config.get("outputPath") or (root / f"claude_{run_id}.md"))).resolve()
     if not output_path.exists():
         raise DelegateError(f"Missing delegate output: {output_path}")
@@ -56,7 +70,7 @@ def verify_artifacts(run_id: str, artifact_root_value: str | None) -> dict[str, 
         raise DelegateError(f"Config outputPath mismatch. Expected: {output_path} ; Actual: {config.get('outputPath')}")
     if not same_path(str(status.get("outputPath")), output_path):
         raise DelegateError(f"Status outputPath mismatch. Expected: {output_path} ; Actual: {status.get('outputPath')}")
-    if str(status.get("status")) in ("starting", "running") and path_has_required_report_headings(output_path):
+    if recover_status and str(status.get("status")) in ("starting", "running") and path_has_required_report_headings(output_path):
         status["status"] = "completed"
         status["statusRecoveredFromReport"] = True
         write_json(status_path, status)
@@ -68,7 +82,7 @@ def verify_artifacts(run_id: str, artifact_root_value: str | None) -> dict[str, 
     if not completed and not structured_failure:
         raise DelegateError(f"Delegate status is neither completed nor failed: {status_value}")
     if not path_has_required_report_headings(output_path):
-        raise DelegateError(f"Delegate output does not contain the required report headings in order: {output_path}")
+        raise DelegateError(f"Delegate output does not contain the unambiguous required report headings: {output_path}")
     report_text = output_path.read_text(encoding="utf-8")
     report_status = parse_report_status(report_text)
     if report_status not in REPORT_STATUS_VALUES:
@@ -84,7 +98,7 @@ def verify_artifacts(run_id: str, artifact_root_value: str | None) -> dict[str, 
     if report_role != str(config.get("role")):
         raise DelegateError(f"Delegate output role mismatch. Config role={config.get('role')}; report role={report_role}.")
     verification_text = report_section(report_text, "Verification").strip()
-    if report_status == "DONE" and not report_has_verification_evidence(verification_text):
+    if report_status in ("DONE", "DONE_WITH_CONCERNS") and not report_has_verification_evidence(verification_text):
         raise DelegateError("Delegate output is missing concrete verification evidence.")
     if report_role == "reviewer":
         if not str(config.get("reviewForTaskId") or "").strip():
@@ -113,6 +127,18 @@ def verify_artifacts(run_id: str, artifact_root_value: str | None) -> dict[str, 
         raise DelegateError(f"Unexpected workflow invocation contract. Expected '{INVOCATION_CONTRACT}'.")
     if workflow.get("workflowId") != workflow_id:
         raise DelegateError("Workflow artifact workflowId mismatch.")
+    if config.get("preparedPlanId"):
+        from .routing import verified_plan
+        entry = workflow.get("preparedTasks", {}).get(config["preparedPlanId"])
+        if not entry or entry.get("runId") != run_id:
+            raise DelegateError("Prepared Claude run is not registered")
+        plan, _ = verified_plan(Path(entry["path"]))
+        if "workerEffort" in plan:
+            expected = {"model": plan["workerModel"], "claudeEffort": plan["workerEffort"],
+                        "scope": plan["scope"], "tests": plan["tests"], "dependsOn": plan["dependsOn"],
+                        "maxBudgetUsd": plan.get("maxBudgetUsd")}
+            if any(config.get(k) != v for k, v in expected.items()):
+                raise DelegateError("Claude run differs from its pinned task settings")
     if run_id not in (workflow.get("runs") or {}):
         raise DelegateError(f"Workflow artifact does not reference run {run_id}.")
     task_id = str(config.get("taskId"))
@@ -215,6 +241,24 @@ def verify_artifacts(run_id: str, artifact_root_value: str | None) -> dict[str, 
 
 
 
+def verify_interrupted(root: Path, run_id: str, config: dict, status: dict) -> dict:
+    """Terminal audit record only; never certify a worker result."""
+    for obj in (config, status):
+        if obj.get("artifactSchema") != ARTIFACT_SCHEMA_VERSION or obj.get("invocationContract") != INVOCATION_CONTRACT:
+            raise DelegateError("Interrupted artifact schema/contract mismatch")
+        if obj.get("runId") != run_id or not obj.get("childThreadMarkerValidated") or obj.get("childThreadMarkerName") != CHILD_MARKER_NAME or obj.get("dryRun"):
+            raise DelegateError("Interrupted artifact identity/provenance mismatch")
+    for field in ("workflowId", "taskId", "role", "codexThreadId"):
+        if config.get(field) != status.get(field):
+            raise DelegateError("Interrupted config/status binding mismatch")
+    if type(status.get("exitCode")) is not int or status["exitCode"] == 0 or status.get("statusRecoveredFromReport"):
+        raise DelegateError("Interrupted execution requires an original nonzero terminal exit code")
+    w = load_json(workflow_path(root, config["workflowId"]))
+    if run_id not in w.get("runs", {}) or run_id not in w.get("tasks", {}).get(config["taskId"], {}).get("runs", []):
+        raise DelegateError("Interrupted run is missing from workflow")
+    return {"config": config, "status": status, "workflow": w, "artifactRoot": root}
+
+
 def run_verify_artifacts(ns: argparse.Namespace) -> int:
     verify_artifacts(ns.run_id, ns.artifact_root)
     print(f"Artifact verification passed for RunId: {ns.run_id}")
@@ -233,13 +277,24 @@ def run_verify_workflow(ns: argparse.Namespace) -> int:
         raise DelegateError(f"Unexpected workflow invocation contract. Expected '{INVOCATION_CONTRACT}'.")
     if workflow.get("workflowId") != ns.workflow_id:
         raise DelegateError("Workflow artifact workflowId mismatch.")
+    from .plan_cancellation import verify_cancellations
+    verify_cancellations(root, workflow)
     verified_runs: dict[str, dict[str, Any]] = {}
+    if not workflow.get("tasks") or not workflow.get("runs"):
+        raise DelegateError("Workflow has no recorded task execution; empty workflows cannot pass acceptance")
     for run_id in (workflow.get("runs") or {}).keys():
-        verified_runs[str(run_id)] = verify_artifacts(str(run_id), str(root))
+        verified_runs[str(run_id)] = verify_artifacts(str(run_id), str(root), recover_status=False, allow_interrupted=True)
+    enforce_current_report_consistency(workflow, verified_runs, require_all=True)
+    verify_project(workflow, verified_runs)
     enforce_workflow_review_gates(workflow)
     enforce_workflow_final_verifier_gate(workflow)
     enforce_declared_tests_are_reported(workflow, verified_runs)
     enforce_parallel_implementer_scope(workflow, verified_runs)
+    verify_lifecycle_evidence(root, workflow)
+    from .check_evidence import verify_main_review
+    verify_main_review(root, workflow)
+    # Never accept solely because an editable aggregate field says "accepted".
+    update_workflow_acceptance(workflow)
     acceptance = workflow.get("finalAcceptance") if isinstance(workflow.get("finalAcceptance"), dict) else {}
     if acceptance.get("status") != "accepted":
         raise DelegateError(
@@ -247,7 +302,58 @@ def run_verify_workflow(ns: argparse.Namespace) -> int:
             f"Details: {acceptance}"
         )
     print(f"Workflow verification passed for WorkflowId: {ns.workflow_id}")
+    if workflow.get("lifecycleSummary"):
+        print("Lifecycle: " + json.dumps(workflow["lifecycleSummary"], ensure_ascii=False))
     return 0
+
+
+def run_verify_final_inputs(ns: argparse.Namespace) -> int:
+    """Verify inputs to a final reviewer without requiring that review to exist yet."""
+    root = resolve_artifact_root(ns.artifact_root, workflow_id=ns.workflow_id)
+    workflow = load_json(workflow_path(root, ns.workflow_id))
+    if workflow.get("workflowId") != ns.workflow_id:
+        raise DelegateError("Workflow id mismatch")
+    tasks = workflow.get("tasks") or {}
+    selected: set[str] = set()
+    for task in tasks.values():
+        if task.get("role") != "implementer":
+            continue
+        if task.get("status") != "completed" or task.get("reviewDecision") != "accepted":
+            raise DelegateError("Final-verifier inputs require completed implementation and accepted current reviews")
+        selected.add(str(task.get("latestRunId") or ""))
+        for review in (task.get("reviews") or {}).values():
+            selected.add(str(review.get("runId") or ""))
+    if not selected or "" in selected:
+        raise DelegateError("No complete implementer/reviewer inputs to verify")
+    records = {rid: verify_artifacts(rid, str(root), recover_status=False) for rid in selected}
+    enforce_current_report_consistency(workflow, records)
+    if any(record["config"].get("dryRun") for record in records.values()):
+        raise DelegateError("Dry-run artifacts cannot be final-verifier inputs")
+    enforce_workflow_review_gates(workflow)
+    enforce_declared_tests_are_reported(workflow, records)
+    enforce_parallel_implementer_scope(workflow, records)
+    print("Final-verifier input checks passed. This is NOT whole-workflow acceptance; "
+          "the main thread must verify the final report and lifecycle after this reviewer finishes.")
+    return 0
+
+
+def enforce_current_report_consistency(workflow: dict[str, Any], records: dict[str, dict[str, Any]], *, require_all: bool = False) -> None:
+    """Do not trust an old aggregate when a current report has changed underneath it."""
+    for task in (workflow.get("tasks") or {}).values():
+        record = records.get(str(task.get("latestRunId") or ""))
+        if not record:
+            if require_all:
+                raise DelegateError("Workflow latest task run is missing from verified records")
+            continue
+        config, status = record["config"], record["status"]
+        if status.get("status") == "interrupted":
+            raise DelegateError("Latest task execution is interrupted; use a fresh run before acceptance")
+        report = Path(config["outputPath"]).read_text(encoding="utf-8")
+        expected = {"lastReportStatus": parse_report_status(report),
+                    "lastReportFinalResult": parse_report_final_result(report),
+                    "lastReportRole": parse_report_role(report), "status": status["status"]}
+        if any(task.get(key) != value for key, value in expected.items()):
+            raise DelegateError(f"Current report/aggregate mismatch for task {task.get('taskId')}")
 
 
 def report_has_verification_evidence(text: str) -> bool:
@@ -266,6 +372,8 @@ def declared_test_variants(test: str, run_id: str, task_id: str) -> set[str]:
 
 
 def enforce_workflow_review_gates(workflow: dict[str, Any]) -> None:
+    if profile(workflow) == "standard":
+        return
     tasks = workflow.get("tasks") if isinstance(workflow.get("tasks"), dict) else {}
     problems: list[str] = []
     for task_id, task in tasks.items():
@@ -295,6 +403,8 @@ def enforce_workflow_review_gates(workflow: dict[str, Any]) -> None:
 
 
 def enforce_workflow_final_verifier_gate(workflow: dict[str, Any]) -> None:
+    if profile(workflow) == "standard":
+        return
     tasks = workflow.get("tasks") if isinstance(workflow.get("tasks"), dict) else {}
     if not any(isinstance(task, dict) and task.get("role") == "implementer" for task in tasks.values()):
         return
@@ -306,13 +416,20 @@ def enforce_workflow_final_verifier_gate(workflow: dict[str, Any]) -> None:
 
 
 def enforce_declared_tests_are_reported(workflow: dict[str, Any], verified_runs: dict[str, dict[str, Any]]) -> None:
+    from .verification_supplements import existing_sidecar_coverage
     problems: list[str] = []
     for run_id, run in (workflow.get("runs") or {}).items():
         record = verified_runs.get(str(run_id))
         if not record:
             continue
+        # Any existing sidecar belonging to a verified run is validated before
+        # every skip branch: an inapplicable or forged sidecar is an error,
+        # never silently ignored. Absent sidecars keep existing behavior.
+        covered = existing_sidecar_coverage(record["artifactRoot"], str(run_id), record)
         config = record["config"]
         status = record["status"]
+        if status.get("status") == "interrupted":
+            continue
         if any(boolish(attempt.get("dryRun")) for attempt in status.get("attempts") or []):
             continue
         tests = [str(item).strip() for item in config.get("tests") or [] if str(item).strip()]
@@ -321,7 +438,7 @@ def enforce_declared_tests_are_reported(workflow: dict[str, Any], verified_runs:
         output_path = Path(str(config.get("outputPath")))
         report_text = output_path.read_text(encoding="utf-8")
         verification_text = report_section(report_text, "Verification")
-        if parse_report_status(report_text) != "DONE":
+        if parse_report_status(report_text) not in ("DONE", "DONE_WITH_CONCERNS"):
             continue
         task_id = str(config.get("taskId") or (run or {}).get("taskId") or run_id)
         missing = [
@@ -329,8 +446,16 @@ def enforce_declared_tests_are_reported(workflow: dict[str, Any], verified_runs:
             for item in tests
             if not any(variant in verification_text for variant in declared_test_variants(item, str(run_id), task_id))
         ]
-        if missing:
-            problems.append(f"task {task_id} missing declared verification evidence: {'; '.join(missing)}")
+        if not missing:
+            continue
+        if covered is not None and set(covered) == set(missing):
+            continue
+        if covered is not None:
+            raise DelegateError(
+                f"Verification supplement invalid for RunId {run_id} TaskId {task_id}: "
+                "sidecar commands do not match the missing declared tests."
+            )
+        problems.append(f"task {task_id} run {run_id} missing declared verification evidence: {'; '.join(missing)}")
     if problems:
         raise DelegateError("Workflow declared verification failed: " + "; ".join(problems))
 
@@ -365,10 +490,28 @@ def enforce_parallel_implementer_scope(workflow: dict[str, Any], verified_runs: 
             problems.append(f"parallel implementer task {task_id} is missing scope")
             continue
         parallel.append((task_id, run_id, scope))
-    for index, (left_task, _left_run, left_scope) in enumerate(parallel):
-        for right_task, _right_run, right_scope in parallel[index + 1 :]:
-            if scopes_overlap(left_scope, right_scope):
-                problems.append(f"overlapping parallel implementer scope between {left_task} and {right_task}")
+    for index, (left_task, left_run, left_scope) in enumerate(parallel):
+        for right_task, right_run, right_scope in parallel[index + 1 :]:
+            if not scopes_overlap(left_scope, right_scope):
+                continue
+            if left_task == right_task:
+                # Serial historical retries of the same task are exempt only
+                # when pinned terminal evidence is re-verified and proves
+                # strict serial execution; any doubt stays rejecting.
+                from .parallel_scope_evidence import prove_serial_same_task
+                root = (verified_runs.get(left_run) or {}).get("artifactRoot")
+                try:
+                    if root is None:
+                        raise DelegateError("missing artifact root for serial evidence")
+                    prove_serial_same_task(Path(root), workflow, left_task, left_run, right_run)
+                    continue
+                except DelegateError as exc:
+                    problems.append(
+                        f"overlapping parallel implementer scope between {left_task} and {right_task} "
+                        f"(runs {left_run} and {right_run}): {exc}"
+                    )
+                    continue
+            problems.append(f"overlapping parallel implementer scope between {left_task} and {right_task}")
     if problems:
         raise DelegateError("Workflow parallel scope gate failed: " + "; ".join(problems))
 

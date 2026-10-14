@@ -2,6 +2,37 @@
   "schemaVersion": 1,
   "invocationContract": "codex_with_cc_workflow",
   "artifactSchemaVersion": 3,
+  "executionProfiles": {
+    "legacyDefault": "strict",
+    "available": ["standard", "strict"],
+    "freezeBeforeDispatch": true,
+    "standardAcceptance": "main-review-and-executed-checks"
+  },
+  "routing": {
+    "backends": ["claude-process", "claude-code", "codex-native"],
+    "preferredClaudeBackend": "claude-process",
+    "processInvocation": "codex_with_cc_process",
+    "processLaunchValidationCommand": "validate-process-launch",
+    "processCommandAuthorization": "task-specific-exact-argv",
+    "preparedPlanCommand": "prepare-task",
+    "nativeResultCommand": "record-native-run",
+    "nativeEvidenceAdapter": "codex-rollout-v1",
+    "legacySpawnPolicy": "inherit_parent"
+  },
+  "lifecycle": {
+    "schemaVersion": 1,
+    "legacyDefaultPolicy": "strict-close",
+    "policies": ["strict-close", "terminal-evidence", "process-exit"],
+    "processEvidenceAdapter": "posix-process-v1",
+    "preflightBeforeSpawn": true,
+    "preferRealCloseWhenAvailable": true,
+    "missingCloseStatus": "unsupported",
+    "terminalEvidenceAdapter": "codex-rollout-v1",
+    "interruptIsClosure": false,
+    "migrationRequiresExplicitApproval": true,
+    "finalInputCommand": "verify-final-inputs",
+    "finalAcceptanceOwner": "main-thread"
+  },
   "childThread": {
     "markerName": "CODEX_CLAUDE_CHILD_THREAD",
     "markerValue": "1"

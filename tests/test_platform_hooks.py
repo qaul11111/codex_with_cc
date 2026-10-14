@@ -55,7 +55,8 @@ def test_session_start_injects_codex_with_cc_contract() -> None:
     assert "spawn_agent" in context
     assert "delegate_to_claude" in context
     assert "Claude Code CLI" in context
-    assert "close every agent attempt" in context
+    assert "configure-lifecycle" in context
+    assert "closeStatus=unsupported" in context
 
 
 def test_user_prompt_submit_reinforces_contract_for_subagent_requests() -> None:

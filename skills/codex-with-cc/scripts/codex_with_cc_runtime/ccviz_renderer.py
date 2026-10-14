@@ -102,7 +102,7 @@ def render_list(workflows: list[dict[str, Any]]) -> None:
             status_str = color_status(w["status"])
             
         tokens = f"{w['totalTokens']:,}"
-        cost = f"${w['totalCostUsd']:.4f}"
+        cost = f"~${w['totalCostUsd']:.4f}" if w.get("totalCostUsd") is not None else "unknown"
         
         # Prepare status with raw padding since ANSI increases length
         status_padding = " " * (w_status - len(w["status"]))
@@ -128,6 +128,13 @@ def render_show(workflow: dict[str, Any]) -> None:
     if final_acc:
         print(f"{BOLD}Final Acceptance:{RESET} {color_status(final_acc.get('status', ''))} ({final_acc.get('reason') or 'Review done'})")
     print(f"{BOLD}Artifact Root:{RESET} {DIM}{workflow.get('artifactRoot', '')}{RESET}")
+    from .lifecycle import lifecycle_notice
+    notice = lifecycle_notice(workflow)
+    if notice:
+        print(f"{DIM}{notice}{RESET}")
+    for plan_id, plan in workflow.get("preparedTasks", {}).items():
+        if plan.get("status") == "cancelled":
+            print(f"{DIM}计划已撤销：{plan.get('taskId')} ({plan_id}) — 未派发；审计：{(plan.get('cancellation') or {}).get('path', 'missing')}{RESET}")
     
     tasks = workflow.get("tasks", {})
     
@@ -250,6 +257,7 @@ def render_audit(workflow: dict[str, Any]) -> None:
     audit_passed = True
     warnings = []
     successes = []
+    standard = (workflow.get("executionPolicy") or {}).get("profile") == "standard"
 
     # 1. Check Artifact Schema
     schema = workflow.get("artifactSchema")
@@ -270,7 +278,9 @@ def render_audit(workflow: dict[str, Any]) -> None:
 
     # 2. Check Roles Chain & Final Verifier Compliance
     has_implementer = any(t.get("role") == "implementer" for t in tasks.values())
-    if has_implementer:
+    if standard:
+        successes.append("Standard profile: use verify-workflow to validate main review and executed checks.")
+    elif has_implementer:
         has_verifier = any(t.get("role") == "final-verifier" for t in tasks.values())
         if has_verifier:
             verifier_completed = any(t.get("role") == "final-verifier" and t.get("status") == "completed" and t.get("lastReportStatus") == "DONE" for t in tasks.values())
@@ -288,7 +298,7 @@ def render_audit(workflow: dict[str, Any]) -> None:
     # 3. Check Review Gates for Implementers
     review_issues = []
     for t_id, t in tasks.items():
-        if t.get("role") == "implementer":
+        if t.get("role") == "implementer" and not standard:
             reviews = t.get("reviews", {})
             for kind in ("spec", "quality"):
                 rev = reviews.get(kind)
@@ -298,7 +308,7 @@ def render_audit(workflow: dict[str, Any]) -> None:
                     review_issues.append(f"Task {t_id} review gate {kind} status is {rev.get('reviewDecision')}.")
                     
     if not review_issues:
-        successes.append("Review Gates: All implementer tasks have accepted spec & quality review gates.")
+        successes.append("Review Gates: No missing independent gates for the configured profile.")
     else:
         for issue in review_issues:
             warnings.append(f"Review Gates: {issue}")
@@ -308,12 +318,14 @@ def render_audit(workflow: dict[str, Any]) -> None:
     stale_runs = 0
     total_tokens = 0
     total_cost = 0.0
+    cost_coverage = 0
     mcp_searches = 0
     generic_searches = 0
 
     for run_id, run in runs.items():
         total_tokens += run.get("tokens", {}).get("total", 0)
-        total_cost += run.get("costUsd", 0.0)
+        total_cost += run.get("costUsd") or 0.0
+        cost_coverage += run.get("costUsd") is not None
         mcp_searches += run.get("mcpInvocations", 0)
         generic_searches += run.get("genericSearchViolations", 0)
 
@@ -336,6 +348,10 @@ def render_audit(workflow: dict[str, Any]) -> None:
             audit_passed = False
 
         # Stale Process check
+        if status in ("abandoned", "stale-process", "unknown-process", "unknown-heartbeat"):
+            warnings.append(f"Run {run_id}: observed process status is {status}.")
+            stale_runs += 1
+            audit_passed = False
         if status == "running":
             attempts = run.get("attempts", [])
             if attempts:
@@ -358,7 +374,8 @@ def render_audit(workflow: dict[str, Any]) -> None:
         successes.append("Process Check: No stale running tasks detected.")
 
     # 5. Network Audit (Minimax MCP vs Generic Web Search)
-    network_line = f"Network Audit: Total Token Cost: {total_tokens:,} tokens (${total_cost:.4f}). Minimax MCP Search calls: {mcp_searches}."
+    cost_text = f"reported subtotal ~${total_cost:.4f}, coverage {cost_coverage}/{len(runs)} runs; not an invoice" if cost_coverage else "cost unavailable"
+    network_line = f"Network Audit: Recorded usage: {total_tokens:,} tokens ({cost_text}). Minimax MCP Search calls: {mcp_searches}."
     if generic_searches > 0:
         warnings.append(f"Network Audit: DETECTED {generic_searches} VIOLATIONS of generic web search / URL fetching instead of Minimax MCP!")
         audit_passed = False
@@ -377,7 +394,7 @@ def render_audit(workflow: dict[str, Any]) -> None:
 
     print(f"\n{BOLD}{CYAN}================================================================================{RESET}")
     if audit_passed:
-        print(f"{BOLD}{GREEN}AUDIT RESULT: TRUSTED & APPROVED{RESET}")
+        print(f"{BOLD}{GREEN}DISPLAY CHECKS PASSED; use verify-workflow for acceptance.{RESET}")
     else:
-        print(f"{BOLD}{RED}AUDIT RESULT: UNTRUSTED / REJECTED{RESET}")
+        print(f"{BOLD}{RED}DISPLAY CHECKS FOUND ISSUES; use verify-workflow for acceptance.{RESET}")
     print(f"{BOLD}{CYAN}================================================================================{RESET}\n")

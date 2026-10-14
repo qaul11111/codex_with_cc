@@ -461,7 +461,7 @@ def test_artifact_verification_rejects_report_role_mismatch() -> None:
         assert "role" in (verified.stdout + verified.stderr).lower()
 
 
-def test_artifact_verification_rejects_text_before_status() -> None:
+def test_artifact_verification_accepts_unambiguous_text_before_status() -> None:
     with tempfile.TemporaryDirectory(prefix="codex_with_cc_report_preamble_") as tmp:
         artifact_root = Path(tmp) / "artifacts"
         result = run_delegate("report preamble contract", ["-DryRun"], artifact_root)
@@ -472,8 +472,7 @@ def test_artifact_verification_rejects_text_before_status() -> None:
 
         verified = verify_artifacts(run_id, artifact_root)
 
-        assert verified.returncode != 0
-        assert "required report headings" in (verified.stdout + verified.stderr)
+        assert verified.returncode == 0, verified.stdout + verified.stderr
 
 
 def test_missing_claude_writes_complete_verifiable_failure_artifacts() -> None:
@@ -555,6 +554,6 @@ def test_report_headings_ignore_fenced_code_examples() -> None:
     decorated_report = "\n".join(f"**{line}**" if line in ("Status", "Role", "Summary", "Changed Files", "Verification", "Findings", "Final Result", "Risks Or Follow-ups") else line for line in REPORT.splitlines())
 
     assert not text_has_required_report_headings(fenced_example)
-    assert not text_has_required_report_headings(decorated_report)
-    assert not text_has_required_report_headings("Here is the report.\n\n" + REPORT)
+    assert text_has_required_report_headings(decorated_report)
+    assert text_has_required_report_headings("Here is the report.\n\n" + REPORT)
     assert text_has_required_report_headings(REPORT)

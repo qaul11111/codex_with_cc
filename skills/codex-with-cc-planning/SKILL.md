@@ -1,32 +1,43 @@
 ---
 name: codex-with-cc-planning
-description: Plan codex-with-cc workflows by turning a subagent or delegation request into scoped tasks, roles, acceptance criteria, and review gates before dispatch.
+description: Plan scoped end-to-end worker assignments while main retains requirements, routing decisions and focused acceptance.
 ---
 
 # Codex with CC Planning
 
-Read `../codex-with-cc/CODEX_WITH_CC.md` before planning. Use this skill when a request needs child-agent, subagent, delegation, 子代理, 委派, or 派工 routing through codex-with-cc.
+Read `../codex-with-cc/references/astra-workflows.md` for commands. Main clarifies
+requirements, sets boundaries and acceptance, and chooses backend/model/effort.
+Main may directly finish simple, known-location, low-risk small tasks. Substantial
+exploration, implementation, tests and repair belong to workers. Exploration-heavy
+or coupled substantial work goes to one end-to-end worker. Optional `advise-task`
+estimates inform granularity and routing; they do not override main judgment or an
+explicit user choice. Do not use fixed line/file/duration routing thresholds.
 
-Produce a concise workflow design before any dispatch. The output must be usable as TaskFile content:
+Give each worker a coherent outcome and sufficient authority to finish it. Avoid
+micro-delegation and mandatory discovery/implementation/test handoffs. Keep the six
+TaskFile fields concise, with exact allowed writes, relevant reads, constraints and
+meaningful checks. Workers resolve routine implementation choices within scope;
+escalate only missing intent, conflicting requirements or scope changes.
 
-- Assign one `WorkflowId` for the user request.
-- Split work into task-file-sized assignments with stable `TaskId` values and explicit dependencies recorded as `-DependsOn`.
-- Choose one role per task: `planner`, `implementer`, `researcher`, `reviewer`, or `final-verifier`.
-- Define `Scope`, allowed writes, forbidden writes, verification commands, and a stable `SessionKey` for each task.
-- Mark each task as serial, parallel read-only, or parallel writable with non-overlapping scope.
-- Define acceptance criteria and both required review gates for every implementer task: `spec` review first, then `quality` review.
-- Include a final-verifier task for every workflow with implementer tasks; workflow verification rejects accepted implementation work without it.
-- Give every task `Goal`, `Allowed Scope`, `Forbidden Actions`, `Acceptance Criteria`, `Verification`, and `Report Requirements`.
-- Plan a `validate_delegate_task.*` pre-dispatch check for non-trivial task files and any task with `-Tests` or reviewer metadata.
-- Use `../codex-with-cc/contract.json` values for roles, status tokens, and report headings; do not invent local variants.
+Record real dependencies with `DependsOn`; parallelize only independent scopes.
+Set MaxParallel from actual host capacity. Main write reservations exist for
+explicitly authorized coordination artifacts, not for taking over substantial
+delegated coding.
+Do not create workers merely to fill slots. Ready chosen tasks use
+`prepare-task -Admit`; queue discovery and advice are optional when they inform
+a real decision. Reviewers pin the exact target run.
 
-Planning quality checks:
+Use standard main acceptance by default and independent focused review when useful.
+Use strict for required or warranted independent spec/quality/final review. Preserve
+current Claude provider routing; native is available only when user routing permits.
+Prefer supported `claude-process` for Claude work, with task-specific exact command
+authorization and a bounded execution timeout. It has no Codex carrier model;
+plan process lifecycle separately from native/legacy child closure. Legacy
+`claude-code` remains available where needed; unsupported routes return to main.
+Record override reasons and check host support. Declare input coverage complete
+only when shared code, build configuration and dependencies are included; otherwise
+retain whole-project checks. Use validate-task for generated files.
 
-- Do not dispatch a task that depends on an unresolved product decision.
-- Do not parallelize tasks that may write the same file or mutate the same behavior.
-- Treat implementer tasks as writable; parallel implementers must have explicit non-overlapping scopes.
-- Prefer a small researcher task before implementation when the code path is unknown.
-- Do not plan inline `-Task`, legacy `-Mode`, or implicit session-key fallback.
-- Return `NEEDS_CONTEXT` when safe decomposition is not possible from the current request and repository context.
-
-Do not run `claude` or `delegate_to_claude.*` from the main thread.
+Plan a brief result card with changed paths, checks, risks and evidence links, so
+main need not ingest repository dumps or full report relays. Reuse current verified
+evidence, and recheck only when changes, failures or unresolved concerns justify it.

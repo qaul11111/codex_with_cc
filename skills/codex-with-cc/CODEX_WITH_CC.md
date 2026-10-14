@@ -1,49 +1,79 @@
 # Codex with CC
 
-This is the portable contract for the Codex main thread -> Codex child thread -> Claude Code CLI workflow.
+This contract covers prepared Claude process, native Codex and legacy child routes.
+
+## New workflow profiles and routes
+
+For new workflows read `references/astra-workflows.md` first. Explicitly configured
+standard workflows use main-thread review with executed checks and source snapshots;
+strict workflows retain independent spec/quality/final-verifier runs. Existing
+workflows remain strict. Supported Claude requests prefer `claude-process`: main
+invokes the fixed launcher with a prepared task, exact commands and bounded timeout.
+No Codex carrier model or child-thread identity is created. Process-exit evidence
+and standard main acceptance remain required. The legacy runner contract below
+applies to `claude-code`, not to the process route.
+Prepared codex-native tasks instead execute directly in a Codex child and import
+the original host final response. Model overrides must match the pinned prepared
+plan; legacy children keep inherited model/effort. Global model settings are unchanged.
 
 ## Required Reading
-Read this file before using the workflow in this repository. Treat `contract.json` as the machine-readable source for roles, status tokens, report headings, trigger patterns, required spawn metadata, and forbidden legacy arguments.
+Read this file only when legacy runner/session details are needed. Current prepared
+workflows use `references/astra-workflows.md`; do not preload this entire contract
+into main for ordinary task preparation. Treat `contract.json` as the machine-readable source for roles, status tokens, report headings, trigger patterns, required spawn metadata, and forbidden legacy arguments.
+
+## Legacy runner details
+
+For new workflow planning and acceptance, use `references/astra-workflows.md`.
+The following describes the transport and compatibility contract. Independent
+reviewer/final stages apply to strict only; standard is owned by main.
 
 ## Core Contract
-1. Any child-agent, subagent, sub-agent, child-thread, subthread, delegation, worker-execution, 子代理, 子线程, 多代理, 委派, 派工, or 执行层 request must use this workflow.
-2. Do not replace it with the default Codex subagent flow, host worker shortcuts, direct `claude`, or direct main-thread `delegate_to_claude.*`.
-3. The Codex main thread owns design, task boundaries, acceptance criteria, review decisions, rework decisions, and final delivery.
-4. Every Claude Code worker run must be carried by a fresh Codex `spawn_agent` child thread that inherits the main-thread model and reasoning effort; use `fork_context: false` or the current host equivalent `fork_turns: "none"`.
-5. The child thread must set `CODEX_CLAUDE_CHILD_THREAD=1` before invoking `delegate_to_claude.*`.
+1. Requested child-agent, subagent, sub-agent, child-thread, subthread, delegation, worker-execution, 子代理, 子线程, 多代理, 委派, 派工 or 执行层 execution uses a registered workflow. Discussion of agents alone does not require dispatch.
+2. Use a registered prepared route, not host worker shortcuts or direct `claude`. Main-thread fixed launch is supported only for validated `claude-process`; direct main-thread `delegate_to_claude.*` remains legacy-incompatible.
+3. The Codex main thread owns requirements, design decisions, task boundaries, focused review and final delivery. Simple known-location low-risk tasks may stay in main; delegated workers own exploration, implementation, tests and local repair end to end.
+4. Legacy `claude-code` runs use a fresh Codex `spawn_agent` child. Legacy children inherit the main-thread model/effort; prepared legacy plans pin separate carrier settings. Use `fork_context: false` or `fork_turns: "none"`. `claude-process` has no carrier.
+5. Legacy child invocation requires `CODEX_CLAUDE_CHILD_THREAD=1` before `delegate_to_claude.*`. Process launch does not assert this marker.
 6. Delegate commands must use task-file-only invocation. `-TaskFile`, `-WorkflowId`, `-TaskId`, `-Role`, and `-SessionKey` are required.
 7. Legacy inline `-Task`, legacy `-Mode`, missing workflow metadata, and implicit session-key fallback are not supported.
-8. The runner selects Claude effort by role: `high` for implementer/final-verifier and `medium` for planner/researcher/reviewer.
+8. Legacy defaults are `high` for implementer/final-verifier and `medium` for other roles. Prepared tasks can pin WorkerEffort per assignment; it is recorded independently of carrier effort.
 9. Workers must follow the TaskFile contract: Goal, Allowed Scope, Forbidden Actions, Acceptance Criteria, Verification, and Report Requirements.
 10. Task files with empty sections, obvious placeholders, or incomplete Report Requirements are invalid; use `validate_delegate_task.*` before dispatch when preparing non-trivial work.
-11. Workers must finish with the exact report headings and concrete verification evidence.
-12. Implementer workflows require accepted `spec` and `quality` reviewer runs plus an accepted `final-verifier` run before workflow acceptance.
+11. Workers must return all report fields and concrete verification evidence; unambiguous presentation variations are accepted.
+12. Strict implementer workflows require accepted `spec` and `quality` reviewer runs plus an accepted `final-verifier` run. Standard workflows require current main-thread review and executable check evidence.
 
 ## Trigger Rule
-Any user mention of child-agent, subagent, sub-agent, child-thread, subthread, delegation, worker-execution, or Chinese equivalents such as 子代理、子线程、多代理、委派、派工、执行层 is a workflow trigger. When triggered, the main Codex thread must use this custom delegation workflow and must not satisfy the request with the default Codex subagent flow, a host-provided agent shortcut, direct `claude` execution, or direct main-thread execution of `delegate_to_claude.*`.
+Requests to execute child work trigger workflow routing. Mere discussion does not
+start workers. Main may finish simple known-location low-risk small tasks directly.
+Substantial exploration or implementation uses end-to-end workers; coupled work
+stays in one worker and independent chunks may run in parallel. Main chooses based
+on context and risk, without fixed line/file/time thresholds. Claude process routes
+use the validated main fixed launcher; `claude-code` retains the legacy chain. Explicitly
+prepared codex-native routes use native host execution and verified transcript
+import. Unregistered shortcuts and direct main-thread Claude CLI execution remain
+unsupported. Read-only version/help/auth-status diagnostics are permitted.
 
 ## workflow/task/run Protocol
 The protocol models every request as:
 
 - `WorkflowId`: one user-level orchestration.
-- `TaskId`: one scoped child-thread assignment inside that workflow.
+- `TaskId`: one scoped worker assignment inside that workflow.
 - `RunId`: one concrete Claude Code execution attempt for a task.
 - `Role`: one of `planner`, `implementer`, `researcher`, `reviewer`, or `final-verifier`.
 
 Artifacts use the current artifact schema. Each run writes `config_<RunId>.json`, `status_<RunId>.json`, `prompt_<RunId>.md`, `stream_<RunId>.jsonl`, `trace_<RunId>.log`, and `claude_<RunId>.md`. Each workflow also writes `workflow_<WorkflowId>.json`, which indexes tasks, runs, scope, verification, review metadata, and final acceptance state.
 
-Reviewer runs must pass `-ReviewForTaskId`, `-ReviewForRunId`, and `-ReviewKind spec` or `-ReviewKind quality`. Reviews bind to one exact implementer run and become stale after the implementer reruns. Implementer tasks are not workflow-accepted until both current reviews are accepted. Task dependencies can be recorded with repeated `-DependsOn <task-id>` values.
+Reviewer runs must pass `-ReviewForTaskId`, `-ReviewForRunId`, and `-ReviewKind spec` or `-ReviewKind quality`. Reviews bind to one exact implementer run and become stale after the implementer reruns. In strict workflows, implementer tasks are not accepted until both current reviews are accepted. Task dependencies can be recorded with repeated `-DependsOn <task-id>` values.
 
 ## Workflow Method
-Use this as a controlled delivery pipeline, borrowing the core discipline from Superpowers:
+Keep requirements and acceptance explicit without imposing unnecessary handoffs:
 
 1. Design gate: clarify the goal, success criteria, scope, constraints, and acceptance evidence before dispatch.
-2. Plan gate: split work into task-file-sized assignments with explicit allowed scope, forbidden actions, verification commands, and review gates.
-3. Dispatch gate: create a fresh child thread per task; do not let workers inherit noisy main-thread context. Spawn every independent task before waiting, batch-wait on all active ids, and close every completed, failed, interrupted, or replaced attempt.
-4. Implementer gate: implementation workers must use test-first or the smallest equivalent verification-first evidence when the repository has a practical test surface.
-5. Review in two passes. First perform spec compliance review; then perform quality review for minimality, maintainability, regression risk, and test sufficiency.
-6. Final-verifier gate: use a final verifier to confirm the aggregate workflow, residual risks, declared verification evidence, and accepted review gates.
-7. Finish with evidence: run artifact verification, workflow verification, session continuity checks when relevant, and repository regression tests.
+2. Plan gate: define coherent end-to-end assignments with concise scope, constraints, acceptance and meaningful checks. Do not split discovery, implementation and testing into mandatory separate workers.
+3. Dispatch gate: read route-appropriate `references/lifecycle.md` and configure actual host capabilities. Launch admitted process tasks directly through the fixed launcher; native/legacy tasks need a fresh child and no inherited noisy main context. Dispatch independent work within capacity and settle every attempt under its actual lifecycle policy.
+4. Implementer gate: workers explore, implement, execute relevant tests and repair locally. Use verification proportional to behavior/risk; test-first or equivalent verification-first evidence is useful for meaningful behavior changes.
+5. Focused acceptance: main starts from compact result cards and inspects relevant actual changes/evidence. Standard has no mandatory separate review workers. Strict requires current spec and quality reviewers for requirement coverage and quality.
+6. Strict final-verifier gate: use a final verifier to confirm the aggregate workflow, residual risks, declared verification evidence, and accepted review gates.
+7. Finish with evidence: ensure current required acceptance checks and artifact/workflow verification; use session-continuity checks only when relevant. Do not repeat passed checks without changed covered inputs/runs, failures or unresolved risk.
 
 If any stage lacks evidence, the main thread must request rework or report the blocker instead of smoothing over the gap.
 
@@ -57,7 +87,8 @@ Every `-TaskFile` must contain these sections:
 - `Verification`: exact commands to run, or the smallest meaningful verification expected.
 - `Report Requirements`: the required report headings and status rules.
 
-The runtime rejects task files that do not contain these sections, leave required sections empty, retain obvious placeholders, or omit required report headings from `Report Requirements`. This makes worker context explicit and prevents old one-line prompts from acting as hidden orchestration.
+The runtime rejects task files that do not contain these sections, leave required sections empty, retain obvious placeholders, or omit required report headings from `Report Requirements`. Keep sections short and specific; do not copy the whole workflow contract into each
+task. Required fields establish scope and evidence, not a reason to micro-delegate.
 
 Pre-dispatch validation:
 
@@ -80,11 +111,18 @@ Codex automatically discovers `./hooks/hooks.json` from the plugin convention di
 
 - `SessionStart` injects a compact routing contract instead of duplicating this full document.
 - `UserPromptSubmit` reinforces the compact routing contract for delegation trigger words.
-- `PreToolUse` denies visible direct `claude`, direct main-thread `delegate_to_claude.*`, missing `CODEX_CLAUDE_CHILD_THREAD=1`, missing `-TaskFile`, missing workflow metadata, missing `-SessionKey`, legacy `-Task`, legacy `-Mode`, reviewer runs without review metadata, and parallel writable runs without `-Scope`.
+- `PreToolUse` rejects visible direct `claude` execution and nonliteral launcher invocations. A process fixed launch must pass runtime immutable-plan, admission and main-host validation. Legacy delegate commands retain marker, task/workflow/session, reviewer and parallel-scope checks.
 
 Codex clients that encrypt `collaboration.spawn_agent` messages before `PreToolUse` expose only opaque prompt ciphertext to the hook. For those payloads, the gate enforces inherited model/reasoning metadata and `fork_turns: "none"`; run artifacts and recorded spawn/close lifecycle remain the authoritative proof for the child marker, delegate command, task metadata, and acceptance.
 
-The hook reads `contract.json` for shared tokens. This is not a kernel boundary; final responsibility remains with the Codex main thread.
+The hook reads `contract.json` for shared tokens. It distinguishes literal heredoc
+data and file/path operations from visible command execution, and checks common
+wrappers and command substitutions. This is a heuristic command-shape guard, not
+a complete shell/interpreter parser or sandbox. It also retains the narrow rejection
+of `sed -i` mutations to the fixed launcher; copying its path is not invocation.
+Dynamic aliases, constructed code
+and same-user artifact tampering need separate runtime/host controls; final
+responsibility remains with main.
 
 ## Trusted Local Terminal Fallback
 This fallback is an execution-location fallback only. Preserve the same `CODEX_CLAUDE_CHILD_THREAD=1` marker, task file, `WorkflowId`, `TaskId`, `Role`, `SessionKey`, session mode, artifact root, scope, and permission flags that the child thread would have used, and pass `-TrustedLocalFallback` so an inherited main-thread `CODEX_THREAD_ID` does not masquerade as child-agent lifecycle evidence.
@@ -97,9 +135,9 @@ Do not replace this with the default Codex subagent flow, a direct `claude` comm
 Configure it with environment variables or a project `.env` file. Environment variables take precedence. By default it reads `DEEPSEEK_API_KEY`, uses base URL `https://api.deepseek.com`, uses model `deepseek-v4-flash`, and waits up to `600` seconds for long-running report model responses. Supported overrides are `DEEPSEEK_BASE_URL` or `DEEPSEEK_API_BASE_URL`, `DEEPSEEK_MODEL`, and `OPENAI_COMPATIBLE_TIMEOUT_SECONDS`; OpenAI-compatible aliases are also accepted. API keys must never be written to artifacts.
 
 ## Roles
-- Codex main thread: clarify intent, approve design, define task files, create child threads, review results, request rework, and decide final acceptance.
-- Codex child thread: provide the visible conversation-tree node and invoke the worker script.
-- Claude Code CLI: execute the delegated task, run verification, and produce a structured report.
+- Codex main thread: clarify intent, decide boundaries/routing, prepare compact tasks, inspect result cards and targeted evidence, and retain final acceptance. Simple known-location low-risk tasks may be completed directly.
+- Codex carrier child (legacy only): invoke the fixed launcher and relay compact results/artifact pointers without duplicate implementation reasoning. Native Codex children execute directly when routing permits. `claude-process` has no carrier.
+- Claude Code CLI: explore, implement, execute authorized checks, repair locally and report within assigned scope. Prefer supported process launch and preserve the selected provider; native requires permitted routing.
 
 Worker roles:
 
@@ -109,18 +147,34 @@ Worker roles:
 - `reviewer`: spec compliance or quality review for a target implementer task.
 - `final-verifier`: workflow-level acceptance and residual risk summary.
 
-Workers are context consumers, not decision owners. They must not create nested delegate runs, broaden scope, or decide that unassigned follow-up work should be executed. When a worker lacks context, it reports `NEEDS_CONTEXT`.
+Workers resolve routine implementation choices within scope. Main owns product
+intent, scope changes and final acceptance. Workers must not create nested delegate
+runs, broaden scope or execute unassigned follow-up work. They investigate
+discoverable facts themselves; missing intent or authority requires `NEEDS_CONTEXT`.
+Return eight-field concise result cards with changed paths, checks, risks and
+evidence links. Preserve complete original reports/logs in artifacts instead of
+relaying them through main. Main follows relevant evidence and targeted diffs.
 
-## Session Modes
+## Legacy Session Modes
 - `PrimaryReuse`: default for planner, researcher, and implementer serial work. Reuses the main Claude session for continuity.
 - `PrimaryAnchor`: parallel-batch anchor. Its result becomes the main reusable context for later serial work.
 - `ParallelPool`: default for reviewer and final-verifier independence, and for parallel side work. Uses reusable pool sessions without writing to the main session.
+
+These modes reuse Claude worker sessions only where the runtime can maintain safe
+session/lock continuity. They do not reuse Codex host attempts: a settled attempt
+always requires a fresh child/descriptor for later work. Verify session continuity
+when it matters; do not promise reuse for unsupported routes.
 
 Only use `-AllowParallel` when task scopes are independent. Parallel writable tasks must pass explicit `-Scope` values. After parallel work, return to serial review before accepting implementation changes.
 
 The default session/lock wait is 30 seconds. Claude execution defaults to 3600 seconds for implementers and 1800 seconds for other roles, with a 600-second silent-output timeout and 15-second heartbeat/lease renewal. Override these explicitly only when the task justifies it.
 
-## Codex Agent Lifecycle
+## Native and Legacy Codex Agent Lifecycle
+Read `references/lifecycle.md` before the first spawn. Configure `strict-close` when
+the host exposes `close_agent`; otherwise explicitly configure `terminal-evidence`
+only with supported local host evidence. Stop before dispatch if neither is possible.
+Legacy workflows remain strict unless the user approves a backed-up migration.
+
 After each successful `spawn_agent`, record the returned id before waiting:
 
 ```bash
@@ -129,7 +183,7 @@ python3 "<installed-workflow-root>/scripts/runtime.py" record-agent-spawn \
   -ArtifactRoot <artifact-root>
 ```
 
-Wait on all active ids together. After `close_agent` succeeds, record closure against the same task and id:
+Wait on all active ids together. In `strict-close` mode, after the real `close_agent` succeeds, record closure against the same task and id:
 
 ```bash
 python3 "<installed-workflow-root>/scripts/runtime.py" record-agent-close \
@@ -137,12 +191,17 @@ python3 "<installed-workflow-root>/scripts/runtime.py" record-agent-close \
   -ArtifactRoot <artifact-root>
 ```
 
-Every non-fallback child run with `CODEX_THREAD_ID` requires explicit spawn and close records. Missing or unclosed attempts block final acceptance.
+Every non-fallback child run with `CODEX_THREAD_ID` requires an explicit spawn and a
+policy-compliant lifecycle record. In `terminal-evidence` mode use
+`runtime.py record-agent-terminal` with original host rollout evidence; closure is
+reported as `unsupported`, never `closed`. Missing evidence blocks acceptance.
+`interrupt_agent` is not closure. See `references/lifecycle.md` for commands,
+evidence requirements, historical audit and limitations.
 
 Current collaboration hosts may return a canonical task handle such as `/root/<task-name>` from spawn while the child runtime exposes a UUID `CODEX_THREAD_ID`. The workflow runtime binds that handle to the UUID only when exactly one unbound spawn exists for the same TaskId; ambiguous candidates remain blocked for explicit resolution.
 
 ## Worker Output
-Claude Code must finish with these exact headings:
+Claude Code must return these fields (presentation and order may vary):
 
 ```text
 Status
@@ -183,9 +242,20 @@ Delegation artifacts are written under `.codex/codex_with_cc/claude-delegate` by
 
 Use `verify_delegate_run.*` or `verify_delegate_artifacts.*` for each run, `verify_delegate_workflow.*` for the workflow aggregate, and `verify_delegate_chain.*` for multi-run session continuity checks. `verify_delegate_workflow.*` enforces review gates, the final-verifier gate, declared `-Tests` evidence for non-dry-run `DONE` reports, and non-overlapping parallel implementer scopes. The shared implementation lives under `scripts/*.py`; platform wrappers stay thin.
 
+Final-verifier TaskFiles must use `runtime.py verify-final-inputs` for input checks
+plus independent content/tests, not require their own `verify_delegate_workflow`
+to pass before their report exists. The main thread runs whole-workflow verification
+after the final report and lifecycle settlement. This separation does not waive
+current spec, quality, final-verifier or lifecycle gates.
+
 `<installed-workflow-root>` means the installed `skills/codex-with-cc` directory, for example `<codex-home>/plugins/cache/aiskyhub/codex-with-cc/<version-or-hash>/skills/codex-with-cc`. Do not use the package root `<version-or-hash>` directory.
 
 ## Fixed Launcher (macOS 1.2.0+)
+
+The hand-written descriptor and marker details below are legacy `claude-code`
+compatibility examples. `claude-process` instead uses generated immutable plans
+and `invocation: codex_with_cc_process`; follow the prepared process guide and do
+not add a child marker or reuse this manual child descriptor.
 
 Codex App approval works best with a single stable command that takes no arguments. The fixed launcher uses a versioned `launch.json` descriptor placed in one directory per child attempt.
 

@@ -2,6 +2,21 @@
 
 本文件是 `codex_with_cc` 的 marketplace-only 安装契约，给 AI 执行安装或更新时使用。README 的安装提示保持不变；不要修改 README。
 
+## 本地 Astra 优化版
+
+本地开发更新沿用已经配置的 `personal` marketplace，不新增 aiskyhub 源。
+先校验源码和测试，再用 Codex 的 plugin-creator 缓存版本工具更新版本后执行
+`codex plugin add codex-with-cc@personal`，并从新缓存安装固定启动器。
+用稳定管理的 Python 解释器安装启动器，不能绑定临时测试虚拟环境。
+用户正常发布安装仍可使用下文 aiskyhub 来源；不要让两个同名副本同时启用。
+
+路由和验收以 [Astra 工作流指南](skills/codex-with-cc/references/astra-workflows.md)
+与 [中文使用指南](ASTRA-USAGE.zh-CN.md) 为准：简单、位置明确、低风险的小任务由
+主线程直接处理；实质性探索、实现、测试和修复由工作代理端到端负责。
+工作流显式选择 `standard` / `strict`；Claude 请求优先受支持的 `claude-process`，
+保留 `claude-code` 兼容链和用户允许时的 `codex-native`。
+无执行策略的历史工作流继续 strict。下面手工描述符和 Claude 命令是兼容入口。
+
 ## 默认交互策略
 
 用户要求安装、集成或更新这套工作流时，默认零打扰执行：
@@ -17,15 +32,27 @@
 
 把本仓库安装为 `aiskyhub/aiskyhub` marketplace 下的用户级 Codex 插件，使所有 child-agent、subagent、sub-agent、child-thread、subthread、delegation、worker-execution、子代理、子线程、多代理、委派、派工或执行层请求都触发 `$codex-with-cc`。
 
-Any user mention of child-agent, subagent, sub-agent, child-thread, subthread, delegation, worker-execution, or Chinese equivalents such as 子代理、子线程、多代理、委派、派工、执行层 is a workflow trigger.
+Actual requests for child-agent execution trigger the workflow. Discussion, diagnosis and documentation that merely mention delegation do not dispatch workers.
 
-触发后必须走：
+选择受支持的 `claude-process` 后走：
+
+```text
+Astra 主线程 -> 已准备且准入的无参数固定启动器 -> Claude Code 工作进程
+```
+
+没有纯 Codex 模型载体，不生成子线程身份。计划固定原始主线程身份、当前供应商、
+任务级精确命令 `AllowedCommandsFile` 和 `ExecutionTimeoutSeconds`；不授予通用 shell
+权限。运行时验证进程启动、PID、退出和原始产物，主线程仍需标准验收。
+
+旧版 `claude-code` 保留：
 
 ```text
 Codex 主线程 -> Codex spawn_agent 子线程 -> 已安装插件中的 delegate_to_claude.* -> scripts/*.py -> Claude Code CLI
 ```
 
-不要把 Codex 默认子代理流程、宿主内置 worker、直接运行 `claude`、或主线程直接执行 `delegate_to_claude.*` 当作替代。
+选择 `codex-native` 时由 prepared task 配置原生子任务，并从原始宿主日志录入结果。
+不能跳过计划、生命周期和验收；主线程只能通过有效 process 计划的固定启动器
+发起工作进程，不能直接调用 Claude CLI 绕过边界。
 
 ## 内部协议
 
@@ -33,17 +60,38 @@ Codex 主线程 -> Codex spawn_agent 子线程 -> 已安装插件中的 delegate
 
 - 每次用户请求对应一个 `WorkflowId`。
 - 每个被拆出的子任务对应一个 `TaskId`。
-- 每次 Claude Code 执行对应一个 `RunId`。
+- 每次 Claude Code 或受支持的原生 Codex 执行对应一个 `RunId`。
 - 每个 worker 必须声明 `Role`，取值为 `planner`、`implementer`、`researcher`、`reviewer` 或 `final-verifier`。
 - 当前 artifact schema 会生成 `workflow_<WorkflowId>.json`，用于聚合 task、run、scope、verification、review gate 和 final acceptance。
-- 委派命令必须使用 task-file-only 形态：`-TaskFile`、`-WorkflowId`、`-TaskId`、`-Role`、`-SessionKey` 都是必填。
+- 旧版委派命令必须使用 task-file-only 形态：`-TaskFile`、`-WorkflowId`、`-TaskId`、`-Role`、`-SessionKey` 都是必填；process 参数由不可变准备计划生成。
 - TaskFile 必须包含 `Goal`、`Allowed Scope`、`Forbidden Actions`、`Acceptance Criteria`、`Verification`、`Report Requirements`。
 - TaskFile 不能为空段、不能保留明显占位符，`Report Requirements` 必须列出完整报告标题；复杂任务派发前可先运行 `validate_delegate_task.*` 预检。
 - 旧式 inline `-Task`、旧式 `-Mode`、隐式 session key fallback 都不保留。
 - reviewer 必须额外传 `-ReviewForTaskId`、当前实现者的 `-ReviewForRunId`，以及 `-ReviewKind spec` 或 `-ReviewKind quality`。
 - worker 报告必须使用 `Status / Role / Summary / Changed Files / Verification / Findings / Final Result / Risks Or Follow-ups`，并且 `Status` 与 `Final Result` 必须一致。
 - 单次运行使用 `verify_delegate_run` 或 `verify_delegate_artifacts` 验证；整条工作流使用 `verify_delegate_workflow` 验证。
-- implementer workflow 必须有 accepted `spec` reviewer、accepted `quality` reviewer 和 accepted `final-verifier`；非 dry-run 的 `DONE` 报告必须覆盖所有 `-Tests` 命令和结果；并行 implementer 的 `-Scope` 不能重叠。
+- strict implementer workflow 必须有 accepted `spec` reviewer、accepted `quality` reviewer 和 accepted `final-verifier`；standard 使用主线程审查和真实命令证据。非 dry-run 的 `DONE` 报告必须覆盖所有 `-Tests` 命令和结果；并行 implementer 的 `-Scope` 不能重叠。
+
+## 宿主生命周期兼容检查
+
+安装后按执行路由阅读已安装 skill 的 `references/lifecycle.md`。
+`claude-process` 在本地 POSIX 宿主使用 `process-exit`，能力快照需真实终端执行工具，
+不要求 spawn/close。超时或中断不能由报告文本改成成功；进程不冒充 Codex 子线程。
+原生/旧版子线程路由的主线程必须在第一次
+spawn 前，按实际可用工具生成能力快照并运行 `runtime.py configure-lifecycle`。
+有 `close_agent` 时使用 `strict-close`；没有关闭接口时，仅在本地原始会话日志、
+运行退出记录等证据可验证的前提下使用 `terminal-evidence`，明确报告
+`closeStatus: unsupported`。`interrupt_agent` 不等于关闭。两种策略都不支持时，
+在派发前停止。真实子线程执行也会在启动 worker 前校验已配置的策略。
+
+旧工作流不会自动降级策略；迁移必须获得用户批准，使用 `-MigrateExisting`
+保留原始备份，逐条核验后补录执行终止证据，不能改写旧 BLOCKED 报告。
+最终核验 worker 运行 `verify-final-inputs` 和独立内容/测试检查；待它返回报告且
+主线程补齐生命周期记录后，再由主线程运行整条 `verify_delegate_workflow`，
+避免要求尚未结束的核验任务验证自己已经结束。
+
+更新缓存并重装后，需要新任务或重载后的新上下文才能拾取新 skill/hook。
+离线单测、dry-run、真实 Claude Code 冒烟和完整工作流验收必须分别报告。
 
 Codex 从插件约定目录自动发现 `./hooks/hooks.json`；`plugin.json` 不重复声明 hooks 字段。宿主启用 Codex hooks 后，`SessionStart` 注入精简路由契约，`UserPromptSubmit` 遇到触发词时再次注入，`PreToolUse` 拦截直接 `claude`、主线程直接 `delegate_to_claude.*`、缺少 `CODEX_CLAUDE_CHILD_THREAD=1`、缺少 `-TaskFile`、缺少 workflow metadata、缺少 `-SessionKey`、旧式 `-Task`、旧式 `-Mode`、reviewer 缺少 review metadata、以及并行写任务无 `-Scope`。
 

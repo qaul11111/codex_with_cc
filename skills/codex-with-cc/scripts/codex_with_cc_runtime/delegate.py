@@ -365,7 +365,39 @@ def run_delegate(ns: argparse.Namespace) -> int:
             "Use -TrustedLocalFallback only for the documented local terminal fallback."
         )
     codex_thread_id = None if trusted_local_fallback else host_codex_thread_id
+    if not trusted_local_fallback and not ns.dry_run:
+        from .lifecycle import require_lifecycle_preflight
+        require_lifecycle_preflight(artifact_root, workflow_id)
     verifier_snapshot = capture_final_verifier_snapshot(artifact_root, workflow_id) if role == "final-verifier" else None
+    execution_policy = None
+    prepared_plan_id = None
+    worker_effort = getattr(ns, "worker_effort", None) or role_effort(role)
+    if workflow_file_path.exists():
+        from .io_utils import load_json
+        from .common import same_path
+        execution_policy = load_json(workflow_file_path).get("executionPolicy")
+        if execution_policy and not same_path(execution_policy["projectRoot"], root):
+            raise DelegateError("Runner project does not match the configured workflow")
+    plan_path = task_file.resolve().parent / "plan.json"
+    if plan_path.exists():
+        from .routing import verified_plan
+        plan, planned_workflow = verified_plan(plan_path)
+        from .adaptive import require_current_dependencies
+        require_current_dependencies(plan, planned_workflow)
+        if plan["backend"] != "claude-code" or plan["workflowId"] != workflow_id or plan["taskId"] != task_id or plan["role"] != role or ns.model != plan["workerModel"]:
+            raise DelegateError("Claude runner does not match its prepared route")
+        if (plan["scope"] != scope or plan["tests"] != tests or plan["allowParallel"] != bool(ns.allow_parallel)
+                or plan["executionPolicy"] != execution_policy or not same_path(plan["artifactRoot"], artifact_root)
+                or plan.get("reviewForTaskId") != ns.review_for_task_id or plan.get("reviewForRunId") != ns.review_for_run_id
+                or plan.get("reviewKind") != ns.review_kind or plan.get("verifiedImplementerRuns") != verifier_snapshot):
+            raise DelegateError("Claude runner inputs differ from the prepared task")
+        if planned_workflow["preparedTasks"][plan["planId"]].get("runId"):
+            raise DelegateError("Prepared plan was already executed; prepare a fresh attempt")
+        if worker_effort != plan.get("workerEffort", role_effort(role)) or depends_on != plan.get("dependsOn", []):
+            raise DelegateError("Claude effort/dependencies differ from the prepared task")
+        if ns.max_budget_usd != plan.get("maxBudgetUsd"):
+            raise DelegateError("Claude budget differs from the prepared task")
+        prepared_plan_id = plan["planId"]
     effective_name = ns.name if ns.name else f"{ns.name_prefix}-{run_id}"
     fingerprint = task_fingerprint(task_text, scope, tests, mode)
 
@@ -385,6 +417,8 @@ def run_delegate(ns: argparse.Namespace) -> int:
         "taskId": task_id,
         "role": role,
         "runnerType": RUNNER_TYPE,
+        "executionPolicy": execution_policy,
+        "preparedPlanId": prepared_plan_id,
         "repoRoot": str(root),
         "workflowRoot": str(workflow_root()),
         "workflowRelativePath": rel,
@@ -424,7 +458,7 @@ def run_delegate(ns: argparse.Namespace) -> int:
         "attemptCount": 0,
         "retryCount": 0,
         "maxRetryCount": int(ns.max_retry_count),
-        "claudeEffort": role_effort(role),
+        "claudeEffort": worker_effort,
         "claudeDisallowedTools": role_disallowed_tools(role).split(","),
         "structuredOutput": True,
         "executionTimeoutSeconds": execution_timeout_seconds,
@@ -444,6 +478,7 @@ def run_delegate(ns: argparse.Namespace) -> int:
         "dryRun": bool(ns.dry_run),
         "codexThreadId": codex_thread_id,
         "status": "starting",
+        "startedAt": now_iso(),
         "pid": os.getpid(),
         "artifactRoot": str(artifact_root),
         "outputPath": str(output_path),
@@ -562,6 +597,7 @@ def run_delegate(ns: argparse.Namespace) -> int:
             raise DelegateError("Claude Code CLI was not found. Install or expose the 'claude' command first.")
 
         status["status"] = "running"
+        status["workerStartedAt"] = now_iso()
         write_json(status_path, status)
         prompt_text = read_text(prompt_path)
         attempt = 0
@@ -610,6 +646,7 @@ def run_delegate(ns: argparse.Namespace) -> int:
                     lease.resume,
                     str(ns.max_budget_usd) if ns.max_budget_usd not in (None, "") else None,
                     bool(ns.bypass_permissions),
+                    effort=worker_effort,
                 )
                 if attempt == 1:
                     config["initialSessionId"] = lease.session_id
@@ -907,6 +944,9 @@ Risks Or Follow-ups
             with contextlib.suppress(TypeError, ValueError):
                 reported_costs.append(float(item["totalCostUsd"]))
         status["totalCostUsd"] = sum(reported_costs) if reported_costs else None
+        status["costCoverageAttempts"] = len(reported_costs)
+        status["costSource"] = "cli-estimate-not-invoice" if reported_costs else "unavailable"
+        status["completedAt"] = now_iso()
         if status["attempts"]:
             status["usage"] = status["attempts"][-1].get("usage") or {}
             status["modelUsage"] = status["attempts"][-1].get("modelUsage") or {}
@@ -928,9 +968,21 @@ Risks Or Follow-ups
                 raise DelegateError(f"Claude delegate retry ceiling reached: {failure_summary_text}")
             raise DelegateError(f"Claude Code finished without the required structured delegate report headings. Output: {output_path}")
         return 0
+    except (KeyboardInterrupt, SystemExit) as exc:
+        status["status"] = "interrupted"
+        status["exitCode"] = 130 if isinstance(exc, KeyboardInterrupt) else int(exc.code or 1)
+        status["interruptedAt"] = now_iso()
+        status["failureDisposition"] = "INTERRUPTED"
+        write_json(status_path, status)
+        raise
     except Exception as exc:
         if not execution_started:
             complete_startup_failure(str(exc), config_path, status_path, output_path, raw_stream_path, trace_path, config, status)
+        elif status.get("status") in ("starting", "running"):
+            status["status"] = "failed"
+            status["exitCode"] = 1
+            status["failureDisposition"] = "RUNNER_ERROR"
+            write_json(status_path, status)
         raise
     finally:
         with contextlib.suppress(Exception):

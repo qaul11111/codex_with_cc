@@ -31,7 +31,10 @@ def test_ai_install_doc_contract() -> None:
     assert "$HOME/.codex/skills/codex-with-cc" in text
     assert "$env:USERPROFILE\\.codex\\skills\\codex-with-cc" in text
     assert "先清理项目下旧安装产物和用户级旧版 `codex-with-cc` skill" in text
-    assert "Any user mention of child-agent, subagent, sub-agent, child-thread, subthread, delegation, worker-execution, or Chinese equivalents such as 子代理、子线程、多代理、委派、派工、执行层 is a workflow trigger." in text
+    assert "Actual requests for child-agent execution trigger the workflow." in text
+    assert "merely mention delegation do not dispatch workers." in text
+    assert "codex plugin add codex-with-cc@personal" in text
+    assert "standard" in text and "codex-native" in text
     assert "codex_with_cc/scripts/delegate_to_claude.py" not in text
     assert "/plugin install codex-with-cc@aiskyhub --scope user" in text
     assert "当前仓库只提供 Codex 插件入口，不提供 Claude 宿主插件配置。" in text

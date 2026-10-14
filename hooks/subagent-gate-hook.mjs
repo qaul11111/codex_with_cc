@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 
 const FALLBACK_CONTRACT = {
   childThread: { markerName: "CODEX_CLAUDE_CHILD_THREAD", markerValue: "1" },
@@ -40,15 +42,17 @@ const FALLBACK_CONTRACT = {
 
 const ROUTING_CONTEXT = [
   "codex-with-cc platform subagent gate:",
-  "- Any child-agent, subagent, child-thread, delegation, worker-execution, 子代理, 子线程, 多代理, 委派, 派工, or 执行层 request must use the codex-with-cc workflow.",
-  "- Required chain: Codex main thread -> Codex spawn_agent child thread -> delegate_to_claude.* -> Claude Code CLI.",
-  "- Preferred macOS child command: use the literal fixed launcher path under CODEX_HOME/bin with no arguments and set the terminal working directory to the per-attempt launch.json directory.",
-  "- Read the codex-with-cc skill only when delegation is requested; do not inject the full contract repeatedly.",
-  "- Spawn every independent task before waiting. Wait on all active agent ids together and process whichever finishes first.",
-  "- record every spawned agent id, bind reviews to the exact implementer run, and close every agent attempt.",
-  "- Child spawn metadata inherits the main-thread model and reasoning effort; use fork_context=false or fork_turns=none, depending on the host schema.",
-  "- The fixed launcher sets CODEX_CLAUDE_CHILD_THREAD=1 and reconstructs the delegate arguments from launch.json; the legacy entrypoint still requires the marker plus -TaskFile, -WorkflowId, -TaskId, -Role, and -SessionKey.",
-  "- Implementer workflows require current spec review, quality review, and final-verifier acceptance. Dry runs never count as acceptance.",
+  "- Main may directly finish simple known-location low-risk tasks. Delegate substantial exploration, implementation, tests and repair as coherent codex-with-cc worker tasks; parallelize independent scopes. Main owns decisions and focused acceptance. Discussion alone never starts workers.",
+  "- Legacy Claude chain: Codex main thread -> Codex spawn_agent child thread -> delegate_to_claude.* -> Claude Code CLI.",
+  "- Read references/astra-workflows.md for prepared routes. Claude requests prefer supported claude-process: main invokes the literal fixed launcher under CODEX_HOME/bin with no arguments and the prepared launch.json directory as cwd. It runs Claude Code CLI without a Codex model carrier; immutable plan, main-host identity and task-specific commands are validated before launch.",
+  "- Read the codex-with-cc skill when choosing or executing useful delegation; preserve explicit user routing choices.",
+  "- For adaptive workflows use ready-tasks then admit-task; only dispatch admitted plans within capacity and scope boundaries. Process each completion and recompute readiness.",
+  "- Configure standard or strict acceptance and configure-lifecycle from actual host tools. claude-process uses process-exit evidence and bounded timeout; it is not a child thread. Native/legacy children need strict-close or terminal-evidence; see references/lifecycle.md.",
+  "- record every spawned agent id and bind reviews to the exact implementer run. Close every attempt when supported; otherwise record verified host/runner terminal evidence with closeStatus=unsupported. Never treat interrupt_agent as closure.",
+  "- Final-verifier workers run verify-final-inputs, not their own whole-workflow acceptance. The main thread verifies the full workflow after the final report and lifecycle settlement.",
+  "- Legacy child spawn metadata inherits the main-thread model/effort; prepared routes use the pinned carrier or native model/effort. Use fork_context=false or fork_turns=none.",
+  "- Legacy child launch alone uses CODEX_CLAUDE_CHILD_THREAD=1 and delegate_to_claude.* metadata. Native plans execute directly and use record-native-run. Preserve explicit provider/model routing; missing usage is unknown and speed/cost savings require measurement.",
+  "- Strict implementer workflows require current spec review, quality review, and final-verifier acceptance. Standard uses run-checks and record-main-review before main-thread verify-workflow. Dry runs and empty workflows never count as acceptance.",
 ].join("\n");
 
 function pluginRoot() {
@@ -286,17 +290,29 @@ function hasAppRecordedLauncher(command) {
 }
 
 function isReadOnlyInspectionCommand(command) {
+  // Inspect every segment, including pipelines. A quoted filename mentioning a
+  // runner is data, not an invocation. Reject substitutions and redirections.
+  if (/\$\(|`|[<>]/.test(command)) return false;
   const segments = shellCommandSegments(command);
-  if (segments.length !== 1 || segments[0].length === 0) {
-    return false;
-  }
-  const tokens = segments[0].map(unquoteShellToken);
+  return segments.length > 0 && segments.every(isReadOnlyInspectionSegment);
+}
+
+function isReadOnlyInspectionSegment(segment) {
+  const tokens = segment.map(unquoteShellToken);
   const executable = shellBasename(tokens[0]);
-  if (["rg", "grep", "findstr", "select-string", "get-content", "cat", "type", "head", "tail", "nl", "wc"].includes(executable)) {
+  if (["pwd", "true"].includes(executable)) return tokens.length === 1;
+  if (executable === "rg") {
+    return !tokens.some((token) => token === "--pre" || token.startsWith("--pre="));
+  }
+  if (["grep", "findstr", "select-string", "get-content", "cat", "type", "head", "tail", "nl", "wc"].includes(executable)) {
     return true;
   }
   if (executable === "sed") {
-    return !tokens.some((token) => token === "-i" || token.startsWith("-i") || token === "--in-place");
+    // Only print-range inspection; sed also has file-write and execution commands.
+    let index = 1;
+    while (["-n", "-e"].includes(tokens[index])) index += 1;
+    return /^(?:\d+|\$)?(?:,(?:\d+|\$))?p$/.test(tokens[index] || "")
+      && !tokens.slice(index + 1).some((token) => token.startsWith("-"));
   }
   if (executable === "git") {
     const subcommand = tokens.find((token, index) => index > 0 && !token.startsWith("-")) || "";
@@ -382,7 +398,7 @@ function shellBasename(token) {
 }
 
 function tokenizeShell(command) {
-  return String(command || "").match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|&&|\|\||[;&|\n\r]|[^\s;&|]+/g) || [];
+  return String(command || "").match(/&&|\|\||[;&|\n\r]|(?:[^\s;&|"'\\]+|\\.|"(?:\\.|[^"\\])*"|'[^']*')+/g) || [];
 }
 
 function shellCommandSegments(command) {
@@ -416,7 +432,7 @@ function optionNeedsValue(token, shortNames, longNames) {
   return shortNames.some((name) => value === name);
 }
 
-function shellSegmentRunsClaude(tokens) {
+function shellSegmentRunsTarget(tokens, target = "claude") {
   let index = 0;
   let wrapperCount = 0;
 
@@ -429,8 +445,18 @@ function shellSegmentRunsClaude(tokens) {
     }
 
     const executable = shellBasename(tokens[index]);
-    if (["claude", "claude.cmd", "claude.exe"].includes(executable)) {
-      return true;
+    const matches = target === "claude"
+      ? ["claude", "claude.cmd", "claude.exe"].includes(executable)
+      : target === "launcher" ? executable === "codex-with-cc-launch"
+        : target === "shell" ? ["sh", "bash", "zsh"].includes(executable)
+          : target === "interpreter" ? /^(?:python[\d.]*|node|ruby|perl)$/.test(executable)
+        : DELEGATE_ENTRYPOINT_PATTERNS.some((pattern) => pattern.test(executable));
+    if (matches) {
+      if (target !== "claude") return true;
+      const args = tokens.slice(index + 1).map(unquoteShellToken);
+      const diagnostic = (args.length === 1 && ["--version", "-v", "--help", "-h"].includes(args[0]))
+        || (args.length === 2 && args[0] === "auth" && args[1] === "status");
+      return !diagnostic;
     }
 
     if (executable === "env") {
@@ -444,7 +470,7 @@ function shellSegmentRunsClaude(tokens) {
           break;
         } else if (["-S", "--split-string"].includes(option)) {
           const splitCommand = unquoteShellToken(tokens[index + 1]);
-          return Boolean(splitCommand) && hasDirectClaudeShellCommand(splitCommand);
+          return Boolean(splitCommand) && shellRunsTarget(splitCommand, target);
         } else if (optionNeedsValue(option, ["-u", "-C"], ["--unset", "--chdir"])) {
           index += 2;
         } else if (option.startsWith("-")) {
@@ -501,25 +527,153 @@ function shellSegmentRunsClaude(tokens) {
       continue;
     }
 
+    if (executable === "eval") {
+      return shellRunsTarget(tokens.slice(index + 1).map(unquoteShellToken).join(" "), target);
+    }
+
+    if (executable === "rg") {
+      return tokens.slice(index + 1).some((token, offset) => {
+        const option = unquoteShellToken(token);
+        const pre = option === "--pre" ? unquoteShellToken(tokens[index + offset + 2])
+          : option.startsWith("--pre=") ? unquoteShellToken(option.slice(6)) : "";
+        return pre && shellRunsTarget(pre, target);
+      });
+    }
+    if (executable === "sed") {
+      if (target === "launcher" && tokens.some((token) => /^-(?:[^-]*i|\-in-place)(?:=|$)/.test(unquoteShellToken(token)))
+          && tokens.some((token) => shellBasename(token) === "codex-with-cc-launch")) return true;
+      return tokens.slice(index + 1).some((token) => {
+        const script = unquoteShellToken(token).match(/^(?:[\d,$]+)?e\s+(.+)$/);
+        return script && shellRunsTarget(script[1], target);
+      });
+    }
+
     if (["sh", "bash", "zsh"].includes(executable)) {
       for (let optionIndex = index + 1; optionIndex < tokens.length; optionIndex += 1) {
         const option = unquoteShellToken(tokens[optionIndex]);
         if (/^-[^-]*c/.test(option)) {
           const nestedCommand = unquoteShellToken(tokens[optionIndex + 1]);
-          return Boolean(nestedCommand) && hasDirectClaudeShellCommand(nestedCommand);
+          return Boolean(nestedCommand) && shellRunsTarget(nestedCommand, target);
         }
         if (!option.startsWith("-")) {
           break;
         }
       }
     }
+    if (["delegate", "launcher"].includes(target) && ["python", "python3", "pwsh", "powershell", "sh", "bash", "zsh"].includes(executable)) {
+      return tokens.slice(index + 1).some((token) => !unquoteShellToken(token).startsWith("-")
+        && (target === "launcher" ? shellBasename(token) === "codex-with-cc-launch"
+          : DELEGATE_ENTRYPOINT_PATTERNS.some((pattern) => pattern.test(unquoteShellToken(token)))));
+    }
     return false;
   }
   return false;
 }
 
+// A command-shape guard, not a shell parser or a sandbox. Heredoc data and
+// quoted prose are not executable positions. Interpreted/dynamic code still
+// requires runtime permissions; these checks only recognize visible execution.
+function commandSubstitutions(source, heredocData = false) {
+  const commands = [];
+  let quote = "";
+  for (let i = 0; i < source.length; i += 1) {
+    const char = source[i];
+    if (char === "\\" && quote !== "'") { i += 1; continue; }
+    if (!heredocData && char === "'" && quote !== '"') { quote = quote === "'" ? "" : "'"; continue; }
+    if (!heredocData && char === '"' && quote !== "'") { quote = quote === '"' ? "" : '"'; continue; }
+    if (quote === "'") continue;
+    if (char === "`") {
+      let end = i + 1;
+      while (end < source.length && source[end] !== "`") {
+        if (source[end] === "\\") end += 1;
+        end += 1;
+      }
+      commands.push(source.slice(i + 1, end));
+      i = end;
+    } else if (["$(", "<(", ">("].includes(source.slice(i, i + 2))) {
+      let end = i + 2;
+      let depth = 1;
+      let innerQuote = "";
+      for (; end < source.length; end += 1) {
+        const inner = source[end];
+        if (inner === "\\" && innerQuote !== "'") { end += 1; continue; }
+        if ((inner === "'" || inner === '"') && (!innerQuote || innerQuote === inner)) {
+          innerQuote = innerQuote ? "" : inner; continue;
+        }
+        if (!innerQuote && inner === "(") depth += 1;
+        if (!innerQuote && inner === ")" && --depth === 0) break;
+      }
+      commands.push(source.slice(i + 2, end));
+      i = end;
+    }
+  }
+  return commands;
+}
+
+function executableShellSources(command) {
+  const lines = String(command || "").split("\n");
+  const shell = [];
+  const additional = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    // Literal delimiters cover normal shell/Python/file-writing heredocs.
+    const documents = [...line.matchAll(/<<(-)?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g)]
+      .filter((match) => {
+        let quote = "";
+        for (let index = 0; index < match.index; index += 1) {
+          const char = line[index];
+          if (char === "\\" && quote !== "'") { index += 1; continue; }
+          if ((char === "'" || char === '"') && (!quote || quote === char)) quote = quote ? "" : char;
+        }
+        return !quote;
+      });
+    shell.push(line);
+    for (const document of documents) {
+      const delimiter = document[2] || document[3] || document[4];
+      const body = [];
+      while (++i < lines.length && (document[1] ? lines[i].replace(/^\t+/, "") : lines[i]) !== delimiter) body.push(lines[i]);
+      const text = body.join("\n");
+      const segments = shellCommandSegments(line);
+      if (segments.some((tokens) => shellSegmentRunsTarget(tokens, "shell"))) additional.push(text);
+      else if (segments.some((tokens) => shellSegmentRunsTarget(tokens, "interpreter"))) {
+        // Obvious interpreter process calls stay blocked; ordinary write_text,
+        // Markdown strings and shutil.copy2 path data do not become commands.
+        for (const call of text.matchAll(/(?:subprocess\.(?:run|call|Popen|check_call|check_output)|os\.(?:system|popen)|(?:exec|execSync|spawn|spawnSync))\s*\(\s*(?:\[\s*)?(['"])(.*?)\1/g)) {
+          additional.push(call[2]);
+        }
+      }
+      if (document[4]) additional.push(...commandSubstitutions(text, true));
+    }
+  }
+  return [shell.join("\n"), ...additional];
+}
+
+function shellRunsTarget(command, target, depth = 0) {
+  if (depth > 16) return false;
+  return executableShellSources(command).some((source) => {
+    const segments = shellCommandSegments(source);
+    const scriptPipe = target === "launcher" && launcherPipedToShell(source);
+    return scriptPipe || segments.some((tokens) => shellSegmentRunsTarget(tokens, target))
+      || commandSubstitutions(source).some((nested) => shellRunsTarget(nested, target, depth + 1));
+  });
+}
+
+function launcherPipedToShell(source) {
+  let current = [];
+  let launcherInput = false;
+  for (const token of [...tokenizeShell(source), ";"]) {
+    if (/^(?:&&|\|\||[;&|]|\n|\r)$/.test(token)) {
+      if (launcherInput && shellSegmentRunsTarget(current, "shell")) return true;
+      launcherInput = token === "|" && (launcherInput
+        || current.some((item) => shellBasename(item) === "codex-with-cc-launch"));
+      current = [];
+    } else current.push(token);
+  }
+  return false;
+}
+
 function hasDirectClaudeShellCommand(command) {
-  return shellCommandSegments(command).some((tokens) => shellSegmentRunsClaude(tokens));
+  return shellRunsTarget(command, "claude");
 }
 
 function hasDirectClaudeCommand(serialized) {
@@ -542,23 +696,60 @@ function modelRequirementReason() {
   return `model must be ${REQUIRED_MODEL}`;
 }
 
+function preparedRoute(payload) {
+  const message = String(payload.message || payload.prompt || "");
+  const match = message.match(/^WorkflowPlan:\s*(.+)$/m);
+  if (!match) return null;
+  const planPath = path.resolve(match[1].trim());
+  const raw = fs.readFileSync(planPath);
+  const plan = JSON.parse(raw);
+  const workflow = JSON.parse(fs.readFileSync(path.join(plan.artifactRoot, `workflow_${plan.workflowId}.json`), "utf8"));
+  const pinned = workflow.preparedTasks?.[plan.planId];
+  if (pinned?.status === "cancelled" || pinned?.cancellation) {
+    throw new Error("prepared workflow plan was cancelled; prepare a fresh plan before dispatch");
+  }
+  if (plan.schemaVersion !== 1 || !["claude-code", "claude-process", "codex-native"].includes(plan.backend)
+      || pinned?.path !== planPath || pinned?.sha256 !== createHash("sha256").update(raw).digest("hex")
+      || JSON.stringify(plan.executionPolicy) !== JSON.stringify(workflow.executionPolicy)
+      || plan.taskSha256 !== createHash("sha256").update(fs.readFileSync(plan.taskFile)).digest("hex")) {
+    throw new Error("prepared workflow plan is changed or unregistered");
+  }
+  if (workflow.executionPolicy?.dispatch) {
+    const receipt = pinned?.admission;
+    const receiptPath = path.join(path.dirname(planPath), "admission.json");
+    if (!receipt || receipt.path !== receiptPath || !fs.existsSync(receiptPath)
+        || receipt.sha256 !== createHash("sha256").update(fs.readFileSync(receiptPath)).digest("hex")) {
+      throw new Error("prepared plan needs admit-task before dispatch");
+    }
+  }
+  return plan;
+}
+
 function validateWorkflowPayload(payload, toolName = "") {
   const serialized = stringify(payload);
   const problems = [];
+  let route = null;
+  try { route = preparedRoute(payload); } catch (error) { problems.push(String(error.message)); }
+  const opaque = isOpaqueCollaborationSpawn(toolName, payload);
 
-  if (REQUIRED_MODEL_POLICY === "inherit_parent") {
+  if (route) {
+    if (route.backend === "claude-process") problems.push("claude-process uses the main-thread fixed launcher, not spawn_agent");
+    if (payload.model !== route.model) problems.push("model must match the prepared workflow plan");
+  } else if (!opaque && REQUIRED_MODEL_POLICY === "inherit_parent") {
     if (hasExplicitModel(payload)) {
       problems.push(modelRequirementReason());
     }
-  } else if (prop(payload, "model", "model") !== REQUIRED_MODEL) {
+  } else if (!opaque && REQUIRED_MODEL_POLICY !== "inherit_parent" && prop(payload, "model", "model") !== REQUIRED_MODEL) {
     problems.push(modelRequirementReason());
   }
   const effort = prop(payload, "reasoning_effort", "reasoningEffort");
-  if (REQUIRED_EFFORT_POLICY === "inherit_parent") {
+  if (route) {
+    if (effort !== route.reasoningEffort) problems.push("reasoning_effort must match the prepared workflow plan");
+  } else if (!opaque && REQUIRED_EFFORT_POLICY === "inherit_parent") {
     if (effort !== undefined && effort !== null && String(effort).trim()) {
       problems.push("reasoning_effort must inherit from the main thread; omit explicit override");
     }
-  } else if (effort !== REQUIRED_EFFORT) {
+  } else if (!opaque && REQUIRED_EFFORT_POLICY !== "inherit_parent" && effort !== REQUIRED_EFFORT) {
     problems.push(`reasoning_effort must be ${REQUIRED_EFFORT}`);
   }
   const forkContext = prop(payload, "fork_context", "forkContext");
@@ -566,6 +757,9 @@ function validateWorkflowPayload(payload, toolName = "") {
     problems.push("fork_context: false is required");
   }
   const forkTurns = prop(payload, "fork_turns", "forkTurns");
+  if (route && forkContext === undefined && forkTurns === undefined) {
+    problems.push("prepared routes require explicit fork_context: false or fork_turns: none");
+  }
   if (forkTurns !== undefined && String(forkTurns).toLowerCase() !== REQUIRED_FORK_TURNS) {
     problems.push(`fork_turns: "${REQUIRED_FORK_TURNS}" is required`);
   }
@@ -573,9 +767,11 @@ function validateWorkflowPayload(payload, toolName = "") {
   // Codex 0.145+ encrypts collaboration child prompts before PreToolUse.
   // The hook can still enforce spawn metadata, while runtime artifacts prove
   // the child marker, delegate invocation, task metadata, and lifecycle.
-  if (isOpaqueCollaborationSpawn(toolName, payload)) {
+  if (opaque) {
     return problems;
   }
+
+  if (route) return problems;
 
   if (hasDirectClaudeCommand(serialized)) {
     problems.push("direct Claude CLI execution is forbidden");
@@ -657,14 +853,23 @@ function handlePreToolUse(input) {
     }
 
     if (isFixedLauncherShellCommand(shellCommand)) {
-      // The stable launcher accepts no arguments; it reads launch.json from
-      // its working directory. No further argument-level checks required.
-    } else if (hasAppRecordedLauncher(shellCommand) && !isReadOnlyInspectionCommand(shellCommand)) {
-      // A command mentions the launcher but is not one of the exact allowed
-      // shapes (e.g. arguments appended, wrong path, same-basename attack).
-      // Deny to keep command stability.
-      problems.push("codex-with-cc-launch must take no arguments and use a stable command shape");
-    } else if (hasDelegateEntrypoint(serialized) && !isReadOnlyInspectionCommand(shellCommand)) {
+      try {
+        const directory = path.resolve(toolInput.workdir || toolInput.cwd || input.cwd || process.cwd());
+        const descriptor = JSON.parse(readOptionalText(path.join(directory, "launch.json")) || "null");
+        const plan = JSON.parse(readOptionalText(path.join(directory, "plan.json")) || "null");
+        if (descriptor?.invocation === "codex_with_cc_process" || plan?.backend === "claude-process") {
+          const validation = spawnSync("python3", [path.join(pluginRoot(), "skills", "codex-with-cc", "scripts", "runtime.py"),
+            "validate-process-launch", "-LaunchDirectory", directory], { encoding: "utf8", timeout: 3500, maxBuffer: 65536 });
+          if (validation.error || validation.status !== 0) {
+            problems.push("claude-process requires a valid immutable plan, admitted launch and original main-host identity");
+          }
+        }
+      } catch {
+        problems.push("fixed launcher descriptor or prepared plan is unreadable or invalid");
+      }
+    } else if (shellRunsTarget(shellCommand, "launcher")) {
+      problems.push("codex-with-cc-launch must take no arguments and use a stable command shape; in-place launcher edits are also blocked");
+    } else if (shellRunsTarget(shellCommand, "delegate")) {
       if (!hasChildMarker(serialized)) {
         problems.push("CODEX_CLAUDE_CHILD_THREAD=1 is required");
       }

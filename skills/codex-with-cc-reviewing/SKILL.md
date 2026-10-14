@@ -1,29 +1,38 @@
 ---
 name: codex-with-cc-reviewing
-description: Review codex-with-cc worker reports, verification evidence, changed files, and findings before accepting or returning delegated work.
+description: Make focused main acceptance decisions from compact worker cards, targeted diffs and current verification evidence.
 ---
 
 # Codex with CC Reviewing
 
-Read `../codex-with-cc/CODEX_WITH_CC.md` before reviewing delegated results.
+Read `../codex-with-cc/references/astra-workflows.md` for acceptance commands.
+Start from a brief result card: changed paths, checks, findings/risks and evidence
+links. Match it to the original run. Inspect relevant actual changes and supporting
+evidence, pulling targeted diffs when needed; do not ingest full logs or repeat
+worker exploration. Confidence or report formatting alone never proves correctness.
+Main retains judgment over requirement coverage, scope, quality and residual risk.
+For `claude-process`, review the process receipt, immutable authorization and
+actual PID/start/exit evidence; no Codex child or carrier model exists. Missing or
+changed process evidence blocks acceptance just as missing child provenance does.
 
-Review duties:
+Standard acceptance belongs to main. DONE_WITH_CONCERNS may be accepted only when
+required checks passed and every concern has a disposition, reason and evidence in
+DecisionsFile. Preserve original status/report and disclose accepted residual risks.
+Missing context, failed checks, interrupted execution and BLOCKED/FAIL cannot be
+waived through concern dispositions.
 
-- Verify the run artifact with `verify_delegate_run.*` or `verify_delegate_artifacts.*`.
-- Confirm the worker was launched from a TaskFile with the required contract sections, not an inline prompt.
-- Confirm generated or risky task files would pass `validate_delegate_task.*`.
-- Check that Status and Final Result use the same valid status token.
-- Check that Role matches the delegated role.
-- Check that reviewer runs include `ReviewForTaskId`, `ReviewForRunId`, and `ReviewKind`, and that the reviewed run is still the implementer's latest run.
-- Inspect Changed Files and Verification for concrete evidence.
-- Reject `DONE` reports that do not name commands actually run and their outcomes.
-- Reject non-dry-run `DONE` reports that omit commands passed through `-Tests`.
-- Treat `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`, and `FAIL` as requiring main-thread judgment before acceptance.
-- Return the task for rework when findings are valid and actionable.
+Workers select, execute and repair relevant tests. Main invokes the deterministic
+run-checks acceptance gate once, judges relevance/sufficiency, records
+record-main-review, then verify-workflow. Ordinary worker logs do not automatically
+replace gate evidence.
+Reuse evidence only while source/run/dependency bindings remain valid. Do not rerun
+unchanged checks just to repeat a worker's result; changed covered inputs/runs,
+failures or unresolved risk justify renewed validation. Whole-project snapshots are
+the default; scoped snapshots require complete task input/dependency declarations.
 
-Use two passes:
-
-1. Spec compliance review: did the worker do exactly the assigned task, stay inside scope, and meet acceptance criteria?
-2. Quality review: are the changes maintainable, minimal, tested, and unlikely to regress adjacent behavior?
-
-Do not accept an implementer task at workflow level until both review passes are accepted in the workflow artifact.
+Add independent focused review when uncertainty or risk warrants it. Strict requires
+current spec/quality reviews and final verification bound to exact implementation
+runs. Final workers use verify-final-inputs; main accepts after lifecycle settlement.
+Formatting variations accepted by the parser need no model call. Send real defects
+to a worker for local correction, and replan repeated failures instead of taking
+substantial delegated implementation or diagnosis into main or making identical redispatches.

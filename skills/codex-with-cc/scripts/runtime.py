@@ -17,4 +17,6 @@ from codex_with_cc_runtime.workflow import *
 
 
 if __name__ == "__main__":
+    from codex_with_cc_runtime.process_cleanup import install_child_process_cleanup
+    install_child_process_cleanup()
     raise SystemExit(main())

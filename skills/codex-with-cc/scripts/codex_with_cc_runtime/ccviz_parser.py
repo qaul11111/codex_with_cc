@@ -10,6 +10,7 @@ from .common import WORKER_ROLES, REPORT_STATUS_VALUES
 from .io_utils import load_json, read_text
 from .paths import project_artifact_root, user_artifact_root
 from .workflow import workflow_path
+from .run_health import observed_status
 from .reports import report_section, parse_report_status, parse_report_final_result, parse_report_role, report_summary_line
 
 # Cost definitions per 1,000,000 tokens
@@ -142,6 +143,7 @@ def list_workflows(artifact_root_value: str | None = None) -> list[dict[str, Any
                 # Calculate aggregate metrics
                 total_tokens = 0
                 total_cost_usd = 0.0
+                cost_coverage = 0
                 min_start = None
                 max_end = None
                 
@@ -162,11 +164,9 @@ def list_workflows(artifact_root_value: str | None = None) -> list[dict[str, Any
                         except Exception:
                             pass
                     total_tokens += metrics["tokens"]["total"]
-                    total_cost_usd += (
-                        reported_cost
-                        if reported_cost is not None
-                        else estimated_cost_usd(metrics["model"], metrics["tokens"])
-                    )
+                    if reported_cost is not None:
+                        total_cost_usd += reported_cost
+                        cost_coverage += 1
 
                 workflows.append({
                     "workflowId": wf_id,
@@ -178,7 +178,8 @@ def list_workflows(artifact_root_value: str | None = None) -> list[dict[str, Any
                     "failedTasks": failed_tasks,
                     "runningTasks": running_tasks,
                     "totalTokens": total_tokens,
-                    "totalCostUsd": total_cost_usd,
+                    "totalCostUsd": total_cost_usd if cost_coverage else None,
+                    "costCoverageRuns": cost_coverage,
                     "finalAcceptance": data.get("finalAcceptance", {}),
                     "artifactRoot": str(root)
                 })
@@ -221,6 +222,8 @@ def get_workflow_details(workflow_id: str, artifact_root_value: str | None = Non
                     if status_path.exists():
                         try:
                             status_data = load_json(status_path)
+                            run_meta["recordedStatus"] = status_data.get("status")
+                            run_meta["status"] = observed_status(status_data)
                             exit_code = status_data.get("exitCode")
                             attempt_count = status_data.get("attemptCount", 1)
                             retry_count = status_data.get("retryCount", 0)
@@ -269,13 +272,13 @@ def get_workflow_details(workflow_id: str, artifact_root_value: str | None = Non
                     cost_usd = (
                         float(effective_reported_cost)
                         if effective_reported_cost is not None
-                        else estimated_cost_usd(model, tokens)
+                        else None
                     )
                     
                     run_meta["tokens"] = tokens
                     run_meta["model"] = model
                     run_meta["costUsd"] = cost_usd
-                    run_meta["costSource"] = "reported" if effective_reported_cost is not None else "estimated"
+                    run_meta["costSource"] = "reported-estimate-not-invoice" if effective_reported_cost is not None else "unavailable"
                     run_meta["mcpInvocations"] = metrics["mcpInvocations"]
                     run_meta["genericSearchViolations"] = metrics["genericSearchViolations"]
 

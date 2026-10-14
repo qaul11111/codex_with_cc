@@ -149,7 +149,10 @@ def test_session_context_is_compact_and_not_reinjected_in_full() -> None:
     assert len(context) < 5000
     assert "Below is the full content" not in context
     assert "record every spawned agent id" in context
-    assert "close every agent attempt" in context
+    assert "configure-lifecycle" in context
+    assert "closeStatus=unsupported" in context
+    assert "Never treat interrupt_agent as closure" in context
+    assert "verify-final-inputs" in context
 
 
 def test_delegate_session_pool_selftest_uses_hashed_state_path() -> None:
@@ -235,7 +238,7 @@ def test_final_acceptance_requires_current_final_verifier() -> None:
             "quality": {"reviewDecision": "accepted", "reviewedRunId": "run-1", "runId": "quality-1"},
         },
     }
-    workflow = {"tasks": {"implement": implementer}}
+    workflow = {"tasks": {"implement": implementer}, "runs": {"run-1": {"role": "implementer"}}}
 
     workflow_runtime.update_workflow_acceptance(workflow)
 

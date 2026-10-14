@@ -181,6 +181,7 @@ def new_claude_cli_args(
     resume: bool,
     max_budget_usd: str | None,
     bypass_permissions: bool,
+    effort: str | None = None,
 ) -> list[str]:
     args = [
         "--verbose",
@@ -194,7 +195,7 @@ def new_claude_cli_args(
         "--name",
         session_name,
         "--effort",
-        role_effort(role),
+        effort or role_effort(role),
         "--disallowed-tools",
         role_disallowed_tools(role),
         "--json-schema",

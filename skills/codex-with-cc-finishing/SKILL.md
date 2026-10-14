@@ -1,24 +1,39 @@
 ---
 name: codex-with-cc-finishing
-description: Finish codex-with-cc workflows by verifying workflow artifacts, session continuity when needed, and final acceptance evidence.
+description: Finish delegated work with focused main acceptance, current checks and verified settlement of every attempt.
 ---
 
 # Codex with CC Finishing
 
-Read `../codex-with-cc/CODEX_WITH_CC.md` before finishing a workflow.
+Read `../codex-with-cc/references/astra-workflows.md` for the selected profile and
+`../codex-with-cc/references/lifecycle.md` for execution settlement.
 
-Completion checklist:
+For standard, review compact result cards and relevant change/evidence excerpts,
+invoke the deterministic run-checks acceptance gate, record main review and run
+verify-workflow. Workers select, execute and repair relevant tests; main retains
+final judgment. Worker logs do not automatically replace acceptance gate evidence. Reuse
+valid evidence instead of repeating tests without changed inputs/runs, failures or
+unresolved concerns. Include explicit dispositions for DONE_WITH_CONCERNS.
+Strict also requires independent current spec/quality reviews and a final verifier;
+main accepts after the final report is settled.
 
-- Run `verify_delegate_workflow.*` for the `WorkflowId`.
-- Run `verify_delegate_chain.*` when the workflow used PrimaryAnchor, ParallelPool, or PrimaryReuse continuity checks.
-- Run the repository's focused or full regression command after accepted implementation tasks.
-- Confirm every implementer task has accepted `spec` and `quality` reviewer runs.
-- Confirm every implementer workflow has an accepted `final-verifier` run.
-- Confirm non-dry-run `DONE` reports include all commands passed with `-Tests`.
-- Confirm parallel implementer tasks have explicit non-overlapping scopes.
-- Confirm task files used the required Goal / Scope / Forbidden / Acceptance / Verification / Report contract.
-- Confirm every accepted run has matching Status, Role, Final Result, and workflow artifact metadata.
-- Confirm every recorded child-agent attempt has a matching successful `close_agent` record, including failed or superseded attempts.
-- Summarize only accepted tasks, rejected tasks, blocked tasks, verification evidence, and residual risks.
+Resolve unfinished preparations and every process or child attempt. Use cancel-prepared-task
+with a reason for an unnecessary undispatched plan and retain its receipt. Never
+invent a successful run or rewrite failed/blocked reports. Unresolved execution,
+stale checks and missing evidence remain blockers. Claude session continuity never
+allows reuse of a settled Codex host attempt.
 
-Do not claim completion unless verification actually ran and passed or the blocker is explicitly reported.
+For `claude-process`, require verified process-exit receipts and report real exit,
+timeout or interruption. Do not invent an agent ID or thread-close status; there is
+no carrier model. A successful process exit does not replace standard main review.
+
+For child routes, when terminal execution is verified and the host has no close interface, say
+“执行已结束；宿主不提供线程关闭接口。” Preserve closeStatus=unsupported in audit data.
+Do not present this capability limitation as execution failure. If termination is
+unverified, report the actual missing evidence.
+
+Deliver the accepted outcome, relevant checks, remaining risks and evidence links;
+keep full reports/logs in artifacts. Distinguish source/fixture checks from live
+host/provider validation and usage estimates from bills. Use session-continuity
+verification and metrics only when relevant. Do not claim speed or cost gains
+without comparable current measurements.

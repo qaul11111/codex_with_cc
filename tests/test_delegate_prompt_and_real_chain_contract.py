@@ -117,3 +117,7 @@ def test_final_verifier_prompt_does_not_hide_review_gate_duty() -> None:
     assert "Review target task id:\nNone" not in prompt
     assert "Review kind:\nNone" not in prompt
     assert "final-verifier must still verify implementer spec and quality review gates" in prompt
+    assert "runtime.py verify-final-inputs" in prompt
+    assert "Do not require your own final report" in prompt
+    assert "The main thread performs whole-workflow acceptance only after" in prompt
+    assert "report closure as unsupported, never closed" in prompt

@@ -8,6 +8,8 @@ from .common import ARTIFACT_SCHEMA_VERSION, INVOCATION_CONTRACT, WORKER_ROLES, 
 from .io_utils import load_json, write_json
 from .locks import acquire_file_lock
 from .reports import parse_report_final_result, parse_report_role, parse_report_status, report_summary_line
+from .lifecycle import lifecycle_gate
+from .execution_policy import profile, main_review_current
 
 
 REQUIRED_IMPLEMENTER_REVIEWS = ("spec", "quality")
@@ -147,6 +149,7 @@ def capture_final_verifier_snapshot(artifact_root: Path, workflow_id: str) -> di
 def update_workflow_acceptance(workflow: dict[str, Any]) -> None:
     tasks = workflow.get("tasks") if isinstance(workflow.get("tasks"), dict) else {}
     task_values = [task for task in tasks.values() if isinstance(task, dict)]
+    lifecycle_pending = lifecycle_gate(workflow)
     dry_runs = [task.get("taskId") for task in task_values if task.get("dryRun")]
     if dry_runs:
         workflow["finalAcceptance"] = {
@@ -174,10 +177,11 @@ def update_workflow_acceptance(workflow: dict[str, Any]) -> None:
     if pending_tasks:
         workflow["finalAcceptance"] = {"status": "pending-run", "pendingTasks": pending_tasks}
         return
+    from .review_decisions import reviewable
     needs_review_tasks = [
         task.get("taskId")
         for task in task_values
-        if task.get("role") != "implementer" and task.get("reviewDecision") != "accepted"
+        if profile(workflow) != "standard" and task.get("role") != "implementer" and task.get("reviewDecision") != "accepted"
     ]
     if needs_review_tasks:
         workflow["finalAcceptance"] = {"status": "needs-review", "pendingTasks": needs_review_tasks}
@@ -195,17 +199,19 @@ def update_workflow_acceptance(workflow: dict[str, Any]) -> None:
             "unregisteredAgentIds": unregistered_agents,
         }
         return
-    open_agents = [
-        attempt.get("agentId")
-        for attempt in attempts.values()
-        if isinstance(attempt, dict) and attempt.get("closeStatus") != "closed"
-    ]
-    if open_agents:
-        workflow["finalAcceptance"] = {
-            "status": "pending-agent-close",
-            "reason": "every spawned Codex child must be closed and recorded",
-            "openAgentIds": open_agents,
-        }
+    if lifecycle_pending:
+        workflow["finalAcceptance"] = lifecycle_pending
+        return
+    if not task_values or not workflow.get("runs"):
+        workflow["finalAcceptance"] = {"status": "pending-run", "reason": "workflow has no recorded task execution"}
+        return
+    if any(not p.get("runId") and p.get("status") != "cancelled" for p in workflow.get("preparedTasks", {}).values()):
+        workflow["finalAcceptance"] = {"status": "pending-task", "reason": "prepared tasks still need execution"}
+        return
+    if profile(workflow) == "standard":
+        incomplete = [t.get("taskId") for t in task_values if not reviewable(t)]
+        workflow["finalAcceptance"] = {"status": "accepted" if not incomplete and main_review_current(workflow) else "pending-main-review",
+                                       "reason": "standard profile requires current main-thread review and verified checks"}
         return
     implementers = [task for task in task_values if task.get("role") == "implementer"]
     if not implementers:
@@ -283,9 +289,23 @@ def update_workflow_record(
         workflow.setdefault("tasks", {})
         workflow.setdefault("runs", {})
         workflow.setdefault("agentAttempts", {})
+        if config_path.exists():
+            config_record = load_json(config_path)
+            plan_id = config_record.get("preparedPlanId")
+            if plan_id:
+                prepared = workflow.get("preparedTasks", {}).get(plan_id)
+                if not prepared or prepared.get("taskId") != task_id or prepared.get("runId") not in (None, run_id):
+                    raise DelegateError("Prepared plan is missing, mismatched or already executed")
+                prepared["runId"] = run_id
         if codex_thread_id:
             attempts = workflow["agentAttempts"]
             attempt = attempts.get(codex_thread_id)
+            if not isinstance(attempt, dict):
+                bound = [a for a in attempts.values() if isinstance(a, dict) and a.get("codexThreadId") == codex_thread_id]
+                if len(bound) == 1:
+                    attempt = bound[0]
+                elif len(bound) > 1:
+                    raise DelegateError(f"ambiguous agent binding for thread {codex_thread_id}")
             if not isinstance(attempt, dict):
                 pending_handles = [
                     candidate
@@ -311,6 +331,10 @@ def update_workflow_record(
                     attempts[codex_thread_id] = attempt
             if attempt.get("taskId") not in (None, task_id):
                 raise DelegateError(f"agent {codex_thread_id} is already bound to task {attempt.get('taskId')}")
+            if attempt.get("settledAt") or attempt.get("closeStatus") == "closed":
+                raise DelegateError(f"agent {codex_thread_id} is settled; use a fresh agent attempt")
+            if attempt.get("runId") not in (None, run_id):
+                raise DelegateError(f"agent {codex_thread_id} already has a run; use a fresh agent attempt")
             attempt.update(
                 {
                     "taskId": task_id,
@@ -440,12 +464,19 @@ def record_agent_spawn(
     )
     try:
         workflow = load_json(path) if path.exists() else empty_workflow(workflow_id)
+        plans = {pid: p for pid, p in workflow.get("preparedTasks", {}).items() if p.get("taskId") == task_id}
+        if plans and (all(p.get("status") == "cancelled" for p in plans.values())
+                or any(p.get("status") == "cancelled" and agent_id.endswith("/" + task_id.replace("-", "_") + "_" + pid[:8])
+                       for pid, p in plans.items())):
+            raise DelegateError("Cannot record dispatch for a cancelled prepared task")
         attempts = workflow.setdefault("agentAttempts", {})
         existing = attempts.get(agent_id)
         if isinstance(existing, dict) and existing.get("taskId") not in (None, task_id):
             raise DelegateError(f"agent {agent_id} is already bound to task {existing.get('taskId')}")
         if isinstance(existing, dict) and existing.get("closeStatus") == "closed":
             raise DelegateError(f"agent {agent_id} is already closed and cannot be reused for another spawn attempt")
+        if isinstance(existing, dict) and existing.get("settledAt"):
+            raise DelegateError(f"agent {agent_id} is settled and cannot be reused for another spawn attempt")
         attempt = existing if isinstance(existing, dict) else {}
         attempt.update(
             {
@@ -456,6 +487,16 @@ def record_agent_spawn(
                 "closeStatus": attempt.get("closeStatus"),
             }
         )
+        if (workflow.get("executionPolicy") or {}).get("dispatch"):
+            from .routing import verified_plan
+            candidates = [(pid, e) for pid, e in plans.items() if e.get("admission") and not e.get("runId") and e.get("status") != "cancelled"]
+            if len(candidates) != 1:
+                raise DelegateError("Spawn must bind one admitted plan for this TaskId")
+            pid, entry = candidates[0]
+            verified_plan(Path(entry["path"]))
+            if any(a.get("preparedPlanId") == pid and a.get("agentId") != agent_id for a in attempts.values()):
+                raise DelegateError("Admitted plan already has a recorded spawn")
+            attempt["preparedPlanId"] = pid
         attempts[agent_id] = attempt
         workflow["revision"] = int(workflow.get("revision") or 0) + 1
         update_workflow_acceptance(workflow)
@@ -482,6 +523,8 @@ def record_agent_close(
         if not path.exists():
             raise DelegateError(f"workflow artifact does not exist: {path}")
         workflow = load_json(path)
+        if (workflow.get("lifecyclePolicy") or {}).get("closeSupported") is False:
+            raise DelegateError("Host does not support thread closure; record execution terminal evidence instead")
         attempts = workflow.get("agentAttempts") if isinstance(workflow.get("agentAttempts"), dict) else {}
         attempt = attempts.get(agent_id)
         if not isinstance(attempt, dict):
